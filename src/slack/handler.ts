@@ -1,20 +1,27 @@
+/**
+ * Slack Bolt event handler registration.
+ *
+ * This module provides an alternative integration path using @slack/bolt's
+ * App class. The primary integration is done directly in app.ts via Hono.
+ * This is kept for reference or for deployments that prefer Bolt's receiver model.
+ */
+
 import type { App } from "@slack/bolt";
 import { runPipeline } from "../pipeline/index.js";
 import { logger } from "../lib/logger.js";
 
 /**
- * Register Slack event handlers on the Bolt app.
+ * Register Slack event handlers on a Bolt app instance.
  *
- * We listen for:
- * - message events (DMs and channels)
- * - app_mention events (when @Aura is used in channels)
+ * Listens for:
+ * - `message` events (DMs and channel messages)
+ * - `app_mention` events (@Aura mentions in channels)
  */
 export function registerHandlers(
   app: App,
   botUserId: string,
   waitUntil?: (promise: Promise<unknown>) => void,
 ): void {
-  // Handle all message events
   app.event("message", async ({ event, client }) => {
     logger.debug("Received message event", {
       channel: event.channel,
@@ -29,7 +36,6 @@ export function registerHandlers(
     });
   });
 
-  // Handle @mentions explicitly
   app.event("app_mention", async ({ event, client }) => {
     logger.debug("Received app_mention event", {
       channel: event.channel,
