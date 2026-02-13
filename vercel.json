@@ -1,0 +1,15 @@
+{
+  "buildCommand": "npm run build",
+  "installCommand": "npm install",
+  "framework": null,
+  "rewrites": [
+    { "source": "/slack/events", "destination": "/api/slack/events" },
+    { "source": "/api/cron/consolidate", "destination": "/api/cron/consolidate" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/consolidate",
+      "schedule": "0 4 * * *"
+    }
+  ]
+}
