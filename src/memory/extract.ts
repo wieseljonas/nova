@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { z } from "zod";
 import { fastModel } from "../lib/ai.js";
 import { embedTexts } from "../lib/embeddings.js";
@@ -72,9 +72,9 @@ export async function extractMemories(context: ExtractionContext): Promise<void>
   try {
     const conversationText = `User (${context.displayName || context.userId}): ${context.userMessage}\n\nAura: ${context.assistantResponse}`;
 
-    const { object } = await generateObject({
+    const { output: object } = await generateText({
       model: fastModel,
-      schema: extractedMemoriesSchema,
+      output: Output.object({ schema: extractedMemoriesSchema }),
       system: EXTRACTION_PROMPT,
       prompt: conversationText,
     });

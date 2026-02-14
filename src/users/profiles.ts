@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import { generateObject } from "ai";
+import { generateText, Output } from "ai";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import {
@@ -117,9 +117,9 @@ export async function updateProfileFromConversation(
     const existingFacts = profile.knownFacts || {};
     const existingStyle = profile.communicationStyle;
 
-    const { object } = await generateObject({
+    const { output: object } = await generateText({
       model: fastModel,
-      schema: profileUpdateSchema,
+      output: Output.object({ schema: profileUpdateSchema }),
       system: `You are analyzing a user's communication style and extracting facts about them. Based on the conversation below and their existing profile, provide an updated assessment.
 
 Existing communication style: ${JSON.stringify(existingStyle)}
