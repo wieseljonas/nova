@@ -74,23 +74,3 @@ export function relativeTime(date: Date, now?: Date): string {
 
   return `back in ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
 }
-
-/**
- * Get a time-appropriate greeting based on the hour.
- */
-export function timeGreeting(timezone?: string): string {
-  const tz = timezone || "UTC";
-  const now = new Date();
-  const hour = parseInt(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      hour: "numeric",
-      hour12: false,
-    }).format(now),
-  );
-
-  if (hour >= 5 && hour < 12) return "morning";
-  if (hour >= 12 && hour < 17) return "afternoon";
-  if (hour >= 17 && hour < 21) return "evening";
-  return "night";
-}

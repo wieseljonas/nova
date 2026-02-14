@@ -1,4 +1,4 @@
-import { sql, lt, and, gt } from "drizzle-orm";
+import { sql, gt } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { memories } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
@@ -46,72 +46,101 @@ export async function decayRelevanceScores(): Promise<number> {
  */
 export async function mergeDuplicateMemories(): Promise<number> {
   try {
-    // Find pairs of very similar memories
-    const duplicates = await db.execute(sql`
-      WITH pairs AS (
-        SELECT
-          m1.id AS id1,
-          m2.id AS id2,
-          m1.content AS content1,
-          m2.content AS content2,
-          m1.relevance_score AS score1,
-          m2.relevance_score AS score2,
-          m1.created_at AS created1,
-          m2.created_at AS created2,
-          1 - (m1.embedding <=> m2.embedding) AS similarity
-        FROM memories m1
-        JOIN memories m2 ON m1.id < m2.id
-        WHERE m1.embedding IS NOT NULL
-          AND m2.embedding IS NOT NULL
-          AND 1 - (m1.embedding <=> m2.embedding) > 0.95
-        LIMIT 100
-      )
-      SELECT * FROM pairs ORDER BY similarity DESC
+    // Fetch all memory IDs with embeddings to iterate individually,
+    // leveraging the HNSW index for nearest-neighbor lookups.
+    const allMemories = await db.execute(sql`
+      SELECT id, embedding, relevance_score, created_at
+      FROM memories
+      WHERE embedding IS NOT NULL
+      ORDER BY id
     `);
 
-    if (!duplicates.rows || duplicates.rows.length === 0) {
-      logger.info("No duplicate memories found");
+    if (!allMemories.rows || allMemories.rows.length === 0) {
+      logger.info("No memories with embeddings found");
       return 0;
     }
 
     let mergedCount = 0;
-    const deletedIds: string[] = [];
+    const deletedIds = new Set<string>();
 
-    for (const pair of duplicates.rows as any[]) {
-      // Keep the one with higher relevance, or more recent if equal
-      const keepId =
-        pair.score1 >= pair.score2 ? pair.id1 : pair.id2;
-      const deleteId = keepId === pair.id1 ? pair.id2 : pair.id1;
+    for (const mem of allMemories.rows as any[]) {
+      if (deletedIds.has(mem.id)) continue;
 
-      if (deletedIds.includes(deleteId) || deletedIds.includes(keepId)) {
-        continue; // Already processed
+      // Use the HNSW index to find nearest neighbors for this memory
+      const neighbors = await db.execute(sql`
+        SELECT
+          id,
+          relevance_score,
+          created_at,
+          1 - (embedding <=> (SELECT embedding FROM memories WHERE id = ${mem.id})) AS similarity
+        FROM memories
+        WHERE id <> ${mem.id}
+          AND embedding IS NOT NULL
+          AND 1 - (embedding <=> (SELECT embedding FROM memories WHERE id = ${mem.id})) > 0.95
+        ORDER BY embedding <=> (SELECT embedding FROM memories WHERE id = ${mem.id})
+        LIMIT 10
+      `);
+
+      if (!neighbors.rows || neighbors.rows.length === 0) continue;
+
+      for (const neighbor of neighbors.rows as any[]) {
+        if (deletedIds.has(neighbor.id)) continue;
+
+        const score1 = Number(mem.relevance_score);
+        const score2 = Number(neighbor.relevance_score);
+
+        // Keep the one with higher relevance, or more recent if equal
+        let keepId: string;
+        let deleteId: string;
+        if (score1 > score2) {
+          keepId = mem.id;
+          deleteId = neighbor.id;
+        } else if (score2 > score1) {
+          keepId = neighbor.id;
+          deleteId = mem.id;
+        } else {
+          // Equal scores — keep the more recent memory
+          const created1 = new Date(mem.created_at).getTime();
+          const created2 = new Date(neighbor.created_at).getTime();
+          if (created1 >= created2) {
+            keepId = mem.id;
+            deleteId = neighbor.id;
+          } else {
+            keepId = neighbor.id;
+            deleteId = mem.id;
+          }
+        }
+
+        if (deletedIds.has(deleteId) || deletedIds.has(keepId)) {
+          continue; // Already processed
+        }
+
+        // Boost the kept memory's relevance (it was mentioned/relevant multiple times)
+        const boostedScore = Math.min(
+          1.0,
+          Math.max(score1, score2) * 1.1,
+        );
+
+        await db
+          .update(memories)
+          .set({
+            relevanceScore: boostedScore,
+            updatedAt: new Date(),
+          })
+          .where(sql`${memories.id} = ${keepId}`);
+
+        // Soft-delete the duplicate by setting its score very low
+        await db
+          .update(memories)
+          .set({
+            relevanceScore: 0.001,
+            updatedAt: new Date(),
+          })
+          .where(sql`${memories.id} = ${deleteId}`);
+
+        deletedIds.add(deleteId);
+        mergedCount++;
       }
-
-      // Boost the kept memory's relevance (it was mentioned/relevant multiple times)
-      const boostedScore = Math.min(
-        1.0,
-        Math.max(pair.score1, pair.score2) * 1.1,
-      );
-
-      await db
-        .update(memories)
-        .set({
-          relevanceScore: boostedScore,
-          updatedAt: new Date(),
-        })
-        .where(sql`${memories.id} = ${keepId}`);
-
-      // Soft-delete the duplicate by setting its score very low
-      await db
-        .update(memories)
-        .set({
-          relevanceScore: 0.001,
-          updatedAt: new Date(),
-        })
-        .where(sql`${memories.id} = ${deleteId}`);
-
-      deletedIds.push(deleteId);
-      mergedCount++;
     }
 
     logger.info(`Merged ${mergedCount} duplicate memories`);

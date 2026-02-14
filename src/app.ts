@@ -107,7 +107,12 @@ app.post("/api/slack/events", async (c) => {
   const timestamp = c.req.header("x-slack-request-timestamp") || "";
   const signature = c.req.header("x-slack-signature") || "";
 
-  if (signingSecret && !verifySlackSignature(rawBody, timestamp, signature)) {
+  if (!signingSecret) {
+    logger.error("SLACK_SIGNING_SECRET is not configured — rejecting request");
+    return c.json({ error: "Server misconfigured" }, 500);
+  }
+
+  if (!verifySlackSignature(rawBody, timestamp, signature)) {
     logger.warn("Invalid Slack signature — rejecting request");
     return c.json({ error: "Invalid signature" }, 401);
   }
