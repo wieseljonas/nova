@@ -30,18 +30,30 @@ export async function getOrCreateProfile(
     return existing[0];
   }
 
-  // Create new profile
-  const [created] = await db
+  // Create new profile (upsert to handle concurrent inserts)
+  const result = await db
     .insert(userProfiles)
     .values({
       slackUserId,
       displayName,
       timezone,
     })
+    .onConflictDoNothing({ target: userProfiles.slackUserId })
     .returning();
 
-  logger.info("Created new user profile", { slackUserId, displayName });
-  return created;
+  if (result.length > 0) {
+    logger.info("Created new user profile", { slackUserId, displayName });
+    return result[0];
+  }
+
+  // Another concurrent request inserted first — fetch the existing row
+  const [concurrentlyCreated] = await db
+    .select()
+    .from(userProfiles)
+    .where(eq(userProfiles.slackUserId, slackUserId))
+    .limit(1);
+
+  return concurrentlyCreated;
 }
 
 /**

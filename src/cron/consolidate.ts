@@ -15,7 +15,7 @@ cronApp.get("/api/cron/consolidate", async (c) => {
   const authHeader = c.req.header("authorization");
   const cronSecret = process.env.CRON_SECRET;
 
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     logger.warn("Unauthorized cron invocation attempt");
     return c.json({ error: "Unauthorized" }, 401);
   }

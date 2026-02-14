@@ -1,6 +1,6 @@
 import { buildSystemPrompt } from "../personality/system-prompt.js";
 import { retrieveMemories } from "../memory/retrieve.js";
-import { getThreadMessages } from "../memory/store.js";
+import { getThreadMessages, getRecentChannelMessages } from "../memory/store.js";
 import { getProfile } from "../users/profiles.js";
 import type { MessageContext } from "./context.js";
 import type { Memory, UserProfile } from "../db/schema.js";
@@ -36,7 +36,9 @@ export async function assemblePrompt(
     getProfile(context.userId),
     context.threadTs
       ? getThreadMessages(context.threadTs, context.channelId, 15)
-      : Promise.resolve([]),
+      : context.isDm
+        ? getRecentChannelMessages(context.channelId, 15)
+        : Promise.resolve([]),
   ]);
 
   // Format thread context as conversation text

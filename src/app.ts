@@ -103,12 +103,6 @@ app.post("/api/slack/events", async (c) => {
     return c.json({ error: "Invalid JSON" }, 400);
   }
 
-  // Handle Slack URL verification challenge
-  if (body.type === "url_verification") {
-    logger.info("Slack URL verification challenge received");
-    return c.json({ challenge: body.challenge });
-  }
-
   // Verify request signature
   const timestamp = c.req.header("x-slack-request-timestamp") || "";
   const signature = c.req.header("x-slack-signature") || "";
@@ -116,6 +110,12 @@ app.post("/api/slack/events", async (c) => {
   if (signingSecret && !verifySlackSignature(rawBody, timestamp, signature)) {
     logger.warn("Invalid Slack signature — rejecting request");
     return c.json({ error: "Invalid signature" }, 401);
+  }
+
+  // Handle Slack URL verification challenge
+  if (body.type === "url_verification") {
+    logger.info("Slack URL verification challenge received");
+    return c.json({ challenge: body.challenge });
   }
 
   // Process the event

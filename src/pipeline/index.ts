@@ -76,6 +76,16 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     textPreview: context.text.substring(0, 80),
   });
 
+  // Determine thread_ts for replies:
+  // - In threads: always reply in the thread
+  // - In DMs (top-level): omit thread_ts so replies appear inline
+  // - In channels (top-level): reply in a thread under the user's message
+  const replyThreadTs = context.threadTs
+    ? context.threadTs
+    : context.isDm
+      ? undefined
+      : context.messageTs;
+
   try {
     // ── Edge case: empty or near-empty message ───────────────────────────
     if (context.text.trim().length === 0) {
@@ -83,7 +93,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       await client.chat.postMessage({
         channel: context.channelId,
         text: "Hey. What's up?",
-        thread_ts: context.threadTs || context.messageTs,
+        thread_ts: replyThreadTs,
       });
       return;
     }
@@ -106,6 +116,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     const transparencyResult = await handleTransparencyCommands(
       { ...context, text: messageText },
       client,
+      replyThreadTs,
     );
     if (transparencyResult) {
       recordPipelineMetrics({
@@ -139,7 +150,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     await client.chat.postMessage({
       channel: context.channelId,
       text: response.formatted,
-      thread_ts: context.threadTs || context.messageTs,
+      thread_ts: replyThreadTs,
     });
 
     const totalMs = Date.now() - pipelineStart;
@@ -192,7 +203,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       await client.chat.postMessage({
         channel: context.channelId,
         text: "Sorry, I hit a snag processing that. Give me a sec and try again.",
-        thread_ts: context.threadTs || context.messageTs,
+        thread_ts: replyThreadTs,
       });
     } catch {
       logger.error("Failed to send error message to Slack");
@@ -207,6 +218,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
 async function handleTransparencyCommands(
   context: MessageContext,
   client: WebClient,
+  replyThreadTs?: string,
 ): Promise<boolean> {
   const text = context.text.toLowerCase().trim();
 
@@ -221,7 +233,7 @@ async function handleTransparencyCommands(
       await client.chat.postMessage({
         channel: context.channelId,
         text: summary,
-        thread_ts: context.threadTs || context.messageTs,
+        thread_ts: replyThreadTs,
       });
       return true;
     } catch (error) {
@@ -231,7 +243,7 @@ async function handleTransparencyCommands(
       await client.chat.postMessage({
         channel: context.channelId,
         text: "I hit a snag pulling that together. Try again in a moment.",
-        thread_ts: context.threadTs || context.messageTs,
+        thread_ts: replyThreadTs,
       });
       return true;
     }
@@ -249,7 +261,7 @@ async function handleTransparencyCommands(
         await client.chat.postMessage({
           channel: context.channelId,
           text: `I looked, but I couldn't find anything matching "${whatToForget}" in what I know about you. Maybe I never stored it, or it might be phrased differently in my memory.`,
-          thread_ts: context.threadTs || context.messageTs,
+          thread_ts: replyThreadTs,
         });
       } else {
         const examplesText =
@@ -259,7 +271,7 @@ async function handleTransparencyCommands(
         await client.chat.postMessage({
           channel: context.channelId,
           text: `Done. I forgot ${result.forgottenCount} thing${result.forgottenCount === 1 ? "" : "s"} related to "${whatToForget}".${examplesText}`,
-          thread_ts: context.threadTs || context.messageTs,
+          thread_ts: replyThreadTs,
         });
       }
       return true;
@@ -271,7 +283,7 @@ async function handleTransparencyCommands(
       await client.chat.postMessage({
         channel: context.channelId,
         text: "Something went wrong trying to forget that. Try again?",
-        thread_ts: context.threadTs || context.messageTs,
+        thread_ts: replyThreadTs,
       });
       return true;
     }

@@ -41,46 +41,6 @@ export function recordPipelineMetrics(metrics: PipelineMetrics): void {
   });
 }
 
-interface ExtractionMetrics {
-  /** Extraction time (ms) */
-  durationMs: number;
-  /** Number of memories extracted */
-  memoriesExtracted: number;
-  /** Types of memories */
-  types: string[];
-  /** User ID */
-  userId: string;
-}
-
-/**
- * Record memory extraction metrics.
- */
-export function recordExtractionMetrics(metrics: ExtractionMetrics): void {
-  logger.info("METRICS:extraction", {
-    ...metrics,
-    timestamp: new Date().toISOString(),
-  });
-}
-
-interface ConsolidationMetrics {
-  /** Total consolidation time (ms) */
-  durationMs: number;
-  /** Memories merged */
-  mergedCount: number;
-  /** Run by cron or manual */
-  trigger: "cron" | "manual";
-}
-
-/**
- * Record consolidation metrics.
- */
-export function recordConsolidationMetrics(metrics: ConsolidationMetrics): void {
-  logger.info("METRICS:consolidation", {
-    ...metrics,
-    timestamp: new Date().toISOString(),
-  });
-}
-
 /**
  * Record an error event for observability.
  */

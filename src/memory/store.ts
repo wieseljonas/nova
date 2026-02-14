@@ -37,27 +37,6 @@ export async function storeMessage(message: NewMessage): Promise<string> {
 }
 
 /**
- * Store an extracted memory with its embedding.
- */
-export async function storeMemory(memory: NewMemory): Promise<string> {
-  try {
-    const [inserted] = await db
-      .insert(memories)
-      .values(memory)
-      .returning({ id: memories.id });
-
-    logger.debug("Stored memory", { id: inserted.id, type: memory.type });
-    return inserted.id;
-  } catch (error) {
-    logger.error("Failed to store memory", {
-      error: String(error),
-      type: memory.type,
-    });
-    throw error;
-  }
-}
-
-/**
  * Batch store multiple memories.
  */
 export async function storeMemories(newMemories: NewMemory[]): Promise<string[]> {

@@ -8,7 +8,7 @@
 
 /** Sycophantic openers to strip */
 const SYCOPHANTIC_OPENERS = [
-  /^Sure[!,.]?\s*/i,
+  /^Sure\b[!,.]?\s*/i,
   /^Absolutely[!,.]?\s*/i,
   /^Of course[!,.]?\s*/i,
   /^Great question[!,.]?\s*/i,
