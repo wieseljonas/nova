@@ -33,10 +33,9 @@ Three things to set up: a **Neon database**, a **Slack app**, and the **Vercel d
 ### Prerequisites
 
 - Node.js 20+
-- A [Vercel](https://vercel.com) account (free tier works)
+- A [Vercel](https://vercel.com) account with AI Gateway enabled
 - A [Neon](https://neon.tech) account (free tier works)
 - A [Slack](https://api.slack.com/apps) workspace where you can create apps
-- An API key for at least one LLM provider (Anthropic, OpenAI, Google, etc.)
 
 ---
 
@@ -163,7 +162,7 @@ MODEL_EMBEDDING=openai/text-embedding-3-small
 
 The format is always `provider/model`. See the [full list of available models](https://sdk.vercel.ai/docs/ai-sdk-providers/ai-gateway).
 
-**You provide API keys for the underlying providers in the Vercel dashboard** (Step 5) -- not in this codebase.
+No API keys to manage -- Vercel AI Gateway handles provider access and billing.
 
 ---
 
@@ -202,12 +201,6 @@ Optional:
 | Variable | Value |
 |---|---|
 | `LOG_LEVEL` | `debug`, `info` (default), `warn`, `error` |
-
-#### Configure AI Gateway provider keys
-
-Go to your Vercel project dashboard -> **AI** -> **AI Gateway** and add API keys for whatever providers your chosen models use. For example, if you're using `anthropic/claude-sonnet-4-20250514`, add your Anthropic API key. If you're using `openai/text-embedding-3-small` for embeddings, add your OpenAI key too.
-
-The gateway handles routing -- your app code doesn't touch any provider API keys.
 
 #### Redeploy
 
@@ -282,7 +275,7 @@ ngrok http 3000
 
 Then update the Slack Event Subscriptions URL to your tunnel URL (`https://xxx.ngrok.io/api/slack/events`).
 
-**Note:** AI Gateway authenticates automatically when deployed on Vercel via OIDC. For local development, you may need to set a `VERCEL_AI_GATEWAY_API_KEY` env var -- see the [AI Gateway docs](https://sdk.vercel.ai/docs/ai-sdk-providers/ai-gateway).
+**Note:** AI Gateway authenticates automatically via OIDC when deployed on Vercel. For local development, run `vercel env pull` to get a local `.env` with the right credentials, or use `vercel dev` which handles auth automatically.
 
 **Drizzle Studio** lets you browse the database:
 
@@ -403,7 +396,7 @@ A daily cron job (4:00 AM UTC) runs:
 | `CRON_SECRET` | Recommended | Protects the `/api/cron/consolidate` endpoint |
 | `LOG_LEVEL` | No | `debug`, `info` (default), `warn`, `error` |
 
-Provider API keys are configured in the **Vercel AI Gateway dashboard**, not as env vars in the app.
+No provider API keys needed -- AI Gateway handles provider access and billing through your Vercel account.
 
 ---
 
@@ -490,9 +483,9 @@ npm run db:studio
 
 **LLM calls fail with authentication errors**
 
-- Check that you've added the right provider API key(s) in the Vercel AI Gateway dashboard
-- If using `anthropic/...` models, you need an Anthropic key. If using `openai/...` for embeddings, you need an OpenAI key too
-- For local dev, you may need to set `VERCEL_AI_GATEWAY_API_KEY`
+- Make sure AI Gateway is enabled on your Vercel project
+- Check that OIDC auth is working -- redeploy if it was recently enabled
+- For local dev, run `vercel env pull` or use `vercel dev`
 
 **Memory retrieval returns nothing**
 
