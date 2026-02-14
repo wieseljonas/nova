@@ -79,7 +79,7 @@ export async function extractMemories(context: ExtractionContext): Promise<void>
       prompt: conversationText,
     });
 
-    if (object.memories.length === 0) {
+    if (!object || object.memories.length === 0) {
       logger.debug("No memories extracted from exchange");
       return;
     }

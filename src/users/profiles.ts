@@ -136,6 +136,11 @@ Only include new facts that are clearly stated or strongly implied. Don't specul
       prompt: `User message: ${userMessage}\n\nAura's response: ${assistantResponse}`,
     });
 
+    if (!object) {
+      logger.debug("Profile update failed: model output did not match schema");
+      return;
+    }
+
     // Merge new facts with existing
     const mergedFacts: KnownFacts = {
       ...existingFacts,
