@@ -64,21 +64,15 @@ You'll fill in the values in the steps below.
 3. Copy the connection string -- it looks like `postgresql://user:pass@ep-xxx.us-east-2.aws.neon.tech/aura?sslmode=require`
 4. Paste it into `.env` as `DATABASE_URL`
 
-**Enable pgvector and create the schema:**
-
-Open the **SQL Editor** in the Neon console (or connect with `psql`) and run the migration file:
+**Run the initial migration:**
 
 ```bash
-# Option A: via psql
-psql $DATABASE_URL -f src/db/migrations/0000_init.sql
-
-# Option B: via Drizzle Kit (pushes schema from code)
-npx drizzle-kit push
+npm run db:migrate
 ```
 
-Both produce the same result. Use whichever you prefer.
+This creates all four tables (`messages`, `memories`, `user_profiles`, `channels`), the pgvector extension, and all indexes. Drizzle tracks applied migrations, so it's safe to run again -- it won't re-apply anything.
 
-To verify it worked, run in the SQL editor:
+To verify it worked, run in the Neon SQL editor:
 
 ```sql
 SELECT tablename FROM pg_tables WHERE schemaname = 'public';
@@ -294,7 +288,7 @@ src/
   db/
     schema.ts                 # Drizzle schema (4 tables)
     client.ts                 # Neon + Drizzle client
-    migrations/0000_init.sql  # Raw SQL migration
+    migrate.ts                # Programmatic migration runner
   lib/
     ai.ts                     # AI Gateway config + model references
     embeddings.ts             # embed() / embedMany() wrappers
@@ -443,16 +437,28 @@ The anti-pattern post-processor in `src/personality/anti-patterns.ts` acts as a 
 
 ## Database Management
 
-```bash
-# Push schema changes to the database
-npm run db:push
+Migrations run automatically on every Vercel deploy via the `vercel-build` script. Drizzle tracks what's been applied, so deploys with no new migrations are a no-op.
 
-# Generate a migration (if you prefer migration files)
+```bash
+# Run migrations manually (local or CI)
+npm run db:migrate
+
+# Generate a new migration after changing src/db/schema.ts
 npm run db:generate
 
-# Open Drizzle Studio (database browser)
+# Push schema directly without migration files (dev only)
+npm run db:push
+
+# Browse the database
 npm run db:studio
 ```
+
+**Workflow for schema changes:**
+
+1. Edit `src/db/schema.ts`
+2. Run `npm run db:generate` -- creates a new SQL migration in `drizzle/`
+3. Commit the migration file
+4. Deploy -- `vercel-build` applies it automatically
 
 ---
 
