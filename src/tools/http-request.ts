@@ -110,7 +110,17 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                 break;
               }
               case "basic": {
-                const encoded = Buffer.from(credResult.value).toString("base64");
+                let basicParsed: { username: string; password: string };
+                try {
+                  basicParsed = JSON.parse(credResult.value);
+                } catch {
+                  return {
+                    error: "basic credential value must be JSON {username, password}",
+                  };
+                }
+                const encoded = Buffer.from(
+                  `${basicParsed.username}:${basicParsed.password}`
+                ).toString("base64");
                 headers["Authorization"] = `Basic ${encoded}`;
                 break;
               }

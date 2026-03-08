@@ -721,6 +721,14 @@ app.post("/api/slack/interactions", async (c) => {
             token_url: tokenUrl,
           });
         }
+      } else if (authScheme === "basic") {
+        const username =
+          payload.view?.state?.values?.cred_username_block?.cred_username?.value;
+        const password =
+          payload.view?.state?.values?.cred_password_block?.cred_password?.value;
+        if (username && password) {
+          value = JSON.stringify({ username, password });
+        }
       } else if (authScheme === "header" || authScheme === "query") {
         const key = payload.view?.state?.values?.cred_key_block?.cred_key?.value;
         const secret =
@@ -770,6 +778,14 @@ app.post("/api/slack/interactions", async (c) => {
             client_secret: clientSecret,
             token_url: tokenUrl,
           });
+        }
+      } else if (authScheme === "basic") {
+        const username =
+          payload.view?.state?.values?.cred_username_block?.cred_username?.value;
+        const password =
+          payload.view?.state?.values?.cred_password_block?.cred_password?.value;
+        if (username && password) {
+          value = JSON.stringify({ username, password });
         }
       } else if (authScheme === "header" || authScheme === "query") {
         const key = payload.view?.state?.values?.cred_key_block?.cred_key?.value;

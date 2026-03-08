@@ -378,10 +378,31 @@ function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
     ];
   }
 
-  const valuePlaceholder =
-    authScheme === "basic"
-      ? "Paste username:password"
-      : "Paste your API token or key";
+  if (authScheme === "basic") {
+    return [
+      {
+        type: "input",
+        block_id: "cred_username_block",
+        label: { type: "plain_text", text: "Username" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_username",
+          placeholder: { type: "plain_text", text: "e.g. admin or user@example.com" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "cred_password_block",
+        label: { type: "plain_text", text: "Password" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_password",
+          sensitive: true,
+          placeholder: { type: "plain_text", text: "Paste password or API key" },
+        },
+      },
+    ];
+  }
 
   return [
     {
@@ -391,7 +412,7 @@ function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
       element: {
         type: "plain_text_input",
         action_id: "cred_value",
-        placeholder: { type: "plain_text", text: valuePlaceholder },
+        placeholder: { type: "plain_text", text: "Paste your API token or key" },
       },
     },
   ];
