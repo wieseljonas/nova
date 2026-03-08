@@ -8,7 +8,7 @@ import { logger } from "../lib/logger.js";
 import type { ConversationThread } from "../memory/retrieve.js";
 import type { ChannelType } from "../pipeline/context.js";
 
-export interface MentionedPerson {
+export interface PersonProfile {
   slackUserId: string;
   displayName: string | null;
   gender: string | null;
@@ -34,7 +34,9 @@ interface SystemPromptContext {
   /** Whether threadContext contains channel history (true) vs. actual thread messages (false) */
   isChannelHistory?: boolean;
   /** People @mentioned in the current message, looked up from the people DB */
-  mentionedPeople?: MentionedPerson[];
+  mentionedPeople?: PersonProfile[];
+  /** The person sending the message, looked up from the people DB */
+  interlocutor?: PersonProfile;
 }
 
 /**
@@ -249,13 +251,23 @@ function formatMemories(memories: Memory[]): string {
 /**
  * Format user profile for tone adaptation hints.
  */
-function formatUserProfile(profile: UserProfile): string {
+function formatUserProfile(profile: UserProfile, interlocutor?: PersonProfile): string {
   const style = profile.communicationStyle;
   const facts = profile.knownFacts;
   const parts: string[] = [];
 
   parts.push(`\n## About the person you're talking to`);
   parts.push(`Display name: ${profile.displayName}`);
+
+  // Enrich with people DB fields (gender, pronouns, language, role, notes)
+  if (interlocutor) {
+    const PRONOUN_MAP: Record<string, string> = { male: 'he/him', female: 'she/her' };
+    if (interlocutor.gender && PRONOUN_MAP[interlocutor.gender]) parts.push(`Communication style: ${PRONOUN_MAP[interlocutor.gender]} pronouns`);
+    if (interlocutor.preferredLanguage) parts.push(`Preferred language: ${interlocutor.preferredLanguage}`);
+    if (interlocutor.jobTitle) parts.push(`Role: ${interlocutor.jobTitle}`);
+    if (interlocutor.managerName) parts.push(`Manager: ${interlocutor.managerName}`);
+    if (interlocutor.notes) parts.push(`Notes: ${interlocutor.notes}`);
+  }
 
   if (style) {
     const styleParts: string[] = [];
@@ -299,7 +311,7 @@ function formatUserProfile(profile: UserProfile): string {
 /**
  * Format @mentioned people for compact injection into the conversation layer.
  */
-function formatMentionedPeople(people: MentionedPerson[]): string {
+function formatMentionedPeople(people: PersonProfile[]): string {
   if (!people.length) return '';
   const lines = people.map(p => {
     const parts = [`<@${p.slackUserId}>`];
@@ -313,6 +325,7 @@ function formatMentionedPeople(people: MentionedPerson[]): string {
   });
   return `\n## Mentioned people\n${lines.join('\n')}`;
 }
+
 
 /**
  * Format retrieved conversation threads for injection into the prompt.
@@ -447,8 +460,9 @@ export async function buildSystemPrompt(
 
   // User profile (if available)
   if (context.userProfile) {
-    conversationParts.push(formatUserProfile(context.userProfile));
+    conversationParts.push(formatUserProfile(context.userProfile, context.interlocutor));
   }
+
 
   // Mentioned people context (from people DB)
   if (context.mentionedPeople?.length) {

@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { buildSystemPrompt, buildDynamicContext, type MentionedPerson } from "../personality/system-prompt.js";
+import { buildSystemPrompt, buildDynamicContext, type PersonProfile } from "../personality/system-prompt.js";
 import { retrieveMemories, retrieveConversations, type ConversationThread } from "../memory/retrieve.js";
 import { embedText } from "../lib/embeddings.js";
 import { getProfile } from "../users/profiles.js";
@@ -69,8 +69,9 @@ export async function assemblePrompt(
     [...(context.text || '').matchAll(MENTION_RE)].map(m => m[1])
   )].filter(id => id !== context.userId);
 
-  // Run memory retrieval, conversation retrieval, profile fetch, and mentioned-people lookup in parallel
-  const [memories, conversations, userProfile, mentionedPeople] = await Promise.all([
+  // Run memory retrieval, conversation retrieval, profile fetch, mentioned-people lookup,
+  // and interlocutor lookup in parallel
+  const [memories, conversations, userProfile, mentionedPeople, interlocutor] = await Promise.all([
     queryEmbedding
       ? retrieveMemories({
           query: queryText,
@@ -91,6 +92,7 @@ export async function assemblePrompt(
       : Promise.resolve([] as ConversationThread[]),
     getProfile(context.userId),
     lookupMentionedPeople(mentionedUserIds),
+    lookupPerson(context.userId),
   ]);
 
   // Format conversation context from live Slack data (already fetched by pipeline).
@@ -134,6 +136,7 @@ export async function assemblePrompt(
     threadContext,
     isChannelHistory,
     mentionedPeople,
+    interlocutor: interlocutor ?? undefined,
   });
 
   // Dynamic per-call context — separated so the stable prompt stays cache-friendly
@@ -172,10 +175,49 @@ If the thread content is sparse, try list_slack_list_items to find the item by m
 }
 
 /**
+ * Look up a single Slack user in the people DB.
+ * Returns null if not found or on error.
+ */
+async function lookupPerson(slackUserId: string): Promise<PersonProfile | null> {
+  try {
+    const manager = alias(people, 'manager');
+    const rows = await db
+      .select({
+        slackUserId: people.slackUserId,
+        displayName: people.displayName,
+        gender: people.gender,
+        preferredLanguage: people.preferredLanguage,
+        jobTitle: people.jobTitle,
+        managerName: manager.displayName,
+        notes: people.notes,
+      })
+      .from(people)
+      .leftJoin(manager, eq(people.managerId, manager.id))
+      .where(eq(people.slackUserId, slackUserId))
+      .limit(1);
+
+    const r = rows[0];
+    if (!r || r.slackUserId === null) return null;
+    return {
+      slackUserId: r.slackUserId,
+      displayName: r.displayName,
+      gender: r.gender,
+      preferredLanguage: r.preferredLanguage,
+      jobTitle: r.jobTitle,
+      managerName: r.managerName,
+      notes: r.notes,
+    };
+  } catch (error) {
+    logger.error("Failed to look up person", { error: String(error), slackUserId });
+    return null;
+  }
+}
+
+/**
  * Look up @mentioned Slack users in the people DB.
  * Uses a single query with a left-join to resolve manager names.
  */
-async function lookupMentionedPeople(slackUserIds: string[]): Promise<MentionedPerson[]> {
+async function lookupMentionedPeople(slackUserIds: string[]): Promise<PersonProfile[]> {
   if (slackUserIds.length === 0) return [];
 
   try {
