@@ -224,12 +224,14 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
         : `  ·  expires ${expiresAt.toISOString().slice(0, 10)}`;
     }
 
-    const overflowOptions: any[] = [
-      {
+    const canWrite = isOwner || cred.permission === "write" || cred.permission === "admin";
+    const overflowOptions: any[] = [];
+    if (canWrite) {
+      overflowOptions.push({
         text: { type: "plain_text", text: "Update" },
         value: `api_credential_update_${cred.id}`,
-      },
-    ];
+      });
+    }
     if (isOwner) {
       overflowOptions.push(
         {
@@ -251,18 +253,21 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
       });
     }
 
-    blocks.push({
+    const section: any = {
       type: "section",
       text: {
         type: "mrkdwn",
         text: `*${cred.name}*  ·  _${source}_ (${permLabel})${expiryText}`,
       },
-      accessory: {
+    };
+    if (overflowOptions.length > 0) {
+      section.accessory = {
         type: "overflow",
         action_id: `api_credential_overflow_${cred.id}`,
         options: overflowOptions,
-      },
-    });
+      };
+    }
+    blocks.push(section);
   }
 
   return blocks;
