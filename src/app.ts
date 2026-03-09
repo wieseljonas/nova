@@ -430,6 +430,10 @@ app.post("/api/slack/interactions", async (c) => {
 
       // ── User API Credential actions ──────────────────────────────────
       if (action.action_id === "api_credential_add" && payload.trigger_id) {
+        if (!isAdmin(userId)) {
+          logger.warn("Non-admin tried to add credential", { userId });
+          break;
+        }
         const addPromise = openAddCredentialModal(
           slackClient,
           payload.trigger_id,
@@ -665,7 +669,7 @@ app.post("/api/slack/interactions", async (c) => {
       }
     }
 
-    if (callbackId === "api_credential_add_submit" && userId) {
+    if (callbackId === "api_credential_add_submit" && userId && isAdmin(userId)) {
       const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
       const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
       const credType = (payload.view?.state?.values?.cred_type_block?.cred_type?.selected_option?.value || "token") as "token" | "oauth_client";

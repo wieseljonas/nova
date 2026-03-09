@@ -154,7 +154,7 @@ async function buildCredentialBlocks(): Promise<any[]> {
 
 // ── User API Credential Blocks ──────────────────────────────────────────────
 
-async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
+async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): Promise<any[]> {
   const creds = await listApiCredentials(userId);
 
   const blocks: any[] = [
@@ -172,17 +172,21 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
         },
       ],
     },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "+ Add Credential", emoji: true },
-          action_id: "api_credential_add",
-          style: "primary",
-        },
-      ],
-    },
+    ...(userIsAdmin
+      ? [
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "+ Add Credential", emoji: true },
+                action_id: "api_credential_add",
+                style: "primary",
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 
   if (creds.length === 0) {
@@ -705,7 +709,7 @@ export async function publishHomeTab(
       );
     }
 
-    const userCredBlocks = await buildUserCredentialBlocks(userId);
+    const userCredBlocks = await buildUserCredentialBlocks(userId, admin);
     blocks.push(...userCredBlocks);
 
     if (admin) {
