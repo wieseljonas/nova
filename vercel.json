@@ -8,8 +8,8 @@
     }
   },
   "rewrites": [
-    { "source": "/slack/events", "destination": "/api/slack/events" },
-    { "source": "/health", "destination": "/api/health" },
+    { "source": "/slack/events", "destination": "/api/index" },
+    { "source": "/health", "destination": "/api/index" },
     { "source": "/(.*)", "destination": "/api/index" }
   ],
   "crons": [
