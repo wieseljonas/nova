@@ -250,15 +250,20 @@ export async function getApiCredentialWithType(
   const decrypted = decryptCredential(cred.value);
 
   if (cred.authScheme === "oauth_client") {
-    let parsed: { client_id: string; client_secret: string; token_url: string };
+    let parsed: { client_id?: string; client_secret?: string; token_url?: string };
     try {
       parsed = JSON.parse(decrypted);
     } catch {
       throw new Error(`oauth_client credential "${name}" has invalid JSON value`);
     }
-    if (!parsed.client_id || !parsed.client_secret || !parsed.token_url) {
+    if (!parsed.client_id || !parsed.client_secret) {
       throw new Error(
-        `oauth_client credential "${name}" missing client_id, client_secret, or token_url`,
+        `oauth_client credential "${name}" missing client_id or client_secret`,
+      );
+    }
+    if (!parsed.token_url) {
+      throw new Error(
+        `oauth_client credential "${name}" missing token_url (may need manual repair if migrated from legacy format)`,
       );
     }
     const tokenResponse = await exchangeOAuthToken(
@@ -657,19 +662,29 @@ export async function runCredentialMigration(): Promise<void> {
         // value wasn't JSON yet — treat as empty object
       }
 
+      // Migrate token_url if present; if null/undefined, leave it out of the JSON blob
+      // (credential will need manual repair later, but won't crash on read)
       if (row.token_url && !parsed.token_url) {
         parsed.token_url = row.token_url as string;
-        const { encryptCredential: enc } = await import("./credentials.js");
-        const reEncrypted = enc(JSON.stringify(parsed));
-
-        await rawSql`
-          UPDATE credentials
-          SET value = ${reEncrypted},
-              auth_scheme = 'oauth_client',
-              updated_at = NOW()
-          WHERE id = ${row.id}
-        `;
+      } else if (!row.token_url && !parsed.token_url) {
+        // No token_url available — log warning but continue migration
+        logger.warn("runCredentialMigration: oauth_client credential missing token_url", {
+          id: row.id,
+        });
+        // Don't set token_url in the blob; the credential will fail validation on read,
+        // but at least the migration won't crash
       }
+
+      const { encryptCredential: enc } = await import("./credentials.js");
+      const reEncrypted = enc(JSON.stringify(parsed));
+
+      await rawSql`
+        UPDATE credentials
+        SET value = ${reEncrypted},
+            auth_scheme = 'oauth_client',
+            updated_at = NOW()
+        WHERE id = ${row.id}
+      `;
     } catch (err) {
       logger.error("runCredentialMigration: failed to migrate row", { id: row.id, err });
     }

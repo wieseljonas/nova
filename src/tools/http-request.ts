@@ -141,10 +141,23 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                     error: `Credential "${input.credential_name}" must include key and secret for header auth`,
                   };
                 }
+                if (!/^[a-zA-Z0-9\-_]+$/.test(parsed.key)) {
+                  return {
+                    ok: false as const,
+                    error: `Invalid header name "${parsed.key}": must contain only alphanumeric characters, hyphens, and underscores`,
+                  };
+                }
                 headers[parsed.key] = parsed.secret;
                 break;
               }
               case "query": {
+                // ⚠️ SECURITY WARNING: Query parameter authentication exposes secrets in URLs.
+                // Secrets will appear in:
+                // - Server access logs
+                // - Browser history
+                // - CDN/proxy logs
+                // - Referer headers when navigating away
+                // Use query auth only when required by the API and no better option exists.
                 let parsed: { key: string; secret: string };
                 try {
                   parsed = JSON.parse(credResult.value);
@@ -160,6 +173,10 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                     error: `Credential "${input.credential_name}" must include key and secret for query auth`,
                   };
                 }
+                logger.warn("Using query parameter auth - secrets will be exposed in URL", {
+                  credential: input.credential_name,
+                  url: input.url,
+                });
                 const urlObj = new URL(requestUrl);
                 urlObj.searchParams.set(parsed.key, parsed.secret);
                 requestUrl = urlObj.toString();
