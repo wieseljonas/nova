@@ -412,7 +412,7 @@ export function createJobTools(
 
     dispatch_headless: defineTool({
       description:
-        "Dispatch a task for immediate headless execution (no Slack streaming overhead). Creates a job and triggers it NOW — no waiting for the 30-min heartbeat. Use for heavy work: backfills, data processing, multi-step investigations. The task runs as full Aura with all tools. Results are posted to the callback channel/thread when done. Admin-only.",
+        "Dispatch a task for immediate headless execution (no Slack streaming overhead). Creates a job and triggers it NOW — no waiting for the 30-min heartbeat. Use for heavy work: backfills, data processing, multi-step investigations. The task runs as full Nova with all tools. Results are posted to the callback channel/thread when done. Admin-only.",
       inputSchema: z.object({
         task: z
           .string()

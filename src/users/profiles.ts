@@ -165,7 +165,7 @@ Analyze the user's message style:
 
 Also extract any new facts you can identify — role, team, interests, personal details, or preferences.
 Only include new facts that are clearly stated or strongly implied. Don't speculate.`,
-      prompt: `User message: ${userMessage}\n\nAura's response: ${assistantResponse}`,
+      prompt: `User message: ${userMessage}\n\nNova's response: ${assistantResponse}`,
     });
 
     if (!object) {

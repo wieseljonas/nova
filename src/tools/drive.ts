@@ -24,7 +24,7 @@ function getDriveNoAccessError(
   context?: ScheduleContext,
 ): string {
   if (userName) {
-    return `No Google Drive access for '${userName}'. They may need to authorize Aura via OAuth first.`;
+    return `No Google Drive access for '${userName}'. They may need to authorize Nova via OAuth first.`;
   }
   if (context?.userId) {
     return "You need to connect your Google account first. Ask me to generate an auth link.";
