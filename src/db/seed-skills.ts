@@ -1,7 +1,7 @@
 /**
  * Seed initial skill notes.
  *
- * Run after migration to bootstrap Aura's core playbooks.
+ * Run after migration to bootstrap Nova's core playbooks.
  * Idempotent: only inserts skills that don't already exist.
  *
  * Usage: tsx src/db/seed-skills.ts

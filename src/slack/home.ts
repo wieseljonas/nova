@@ -637,7 +637,7 @@ export async function publishHomeTab(
     const blocks: any[] = [
       {
         type: "header",
-        text: { type: "plain_text", text: "Aura Settings" },
+        text: { type: "plain_text", text: "Nova Settings" },
       },
       {
         type: "context",

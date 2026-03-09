@@ -96,7 +96,7 @@ export async function assemblePrompt(
   ]);
 
   // Format conversation context from live Slack data (already fetched by pipeline).
-  // Include channel-history fallback for DMs, threaded messages, and when Aura
+  // Include channel-history fallback for DMs, threaded messages, and when Nova
   // is recently active in the channel (Tier 3) — otherwise the response LLM
   // would have no conversation context despite the shouldRespond gate seeing it.
   const useChannelFallback =
