@@ -38,7 +38,7 @@ Built with TypeScript, Hono, Vercel serverless functions, Vercel AI SDK v6, and 
 
 **Memory** — After every exchange, facts, decisions, and open threads are extracted, embedded, and stored. Semantic search over all past conversations.
 
-**Jobs** — Scheduled and recurring tasks with cron execution, playbooks, and retry logic. Nova creates jobs for itself when she spots recurring work.
+**Jobs** — Scheduled and recurring tasks with cron execution, playbooks, and retry logic. Nova creates jobs for herself when she spots recurring work.
 
 ---
 
