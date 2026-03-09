@@ -3,6 +3,7 @@ import { db } from "../db/client.js";
 import { memories, userProfiles, type Memory } from "../db/schema.js";
 import { logger } from "../lib/logger.js";
 import { embedText } from "../lib/embeddings.js";
+import { AGENT_NAME } from "../config.js";
 
 /**
  * Transparency features (NFR-3).
@@ -13,7 +14,7 @@ import { embedText } from "../lib/embeddings.js";
  */
 
 /**
- * Get everything Nova knows about a user — their profile and all memories
+ * Get everything \${AGENT_NAME} knows about a user — their profile and all memories
  * where they appear in relatedUserIds.
  */
 export async function getKnowledgeAboutUser(

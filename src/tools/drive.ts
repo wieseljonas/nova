@@ -4,6 +4,7 @@ import { logger } from "../lib/logger.js";
 import { isTextMimeType } from "../lib/files.js";
 import { resolveEffectiveUserId } from "../lib/resolve-user.js";
 import type { ScheduleContext } from "../db/schema.js";
+import { AGENT_NAME } from "../config.js";
 
 const MAX_DOWNLOAD_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -24,7 +25,7 @@ function getDriveNoAccessError(
   context?: ScheduleContext,
 ): string {
   if (userName) {
-    return `No Google Drive access for '${userName}'. They may need to authorize Nova via OAuth first.`;
+    return `No Google Drive access for '${userName}'. They may need to authorize \${AGENT_NAME} via OAuth first.`;
   }
   if (context?.userId) {
     return "You need to connect your Google account first. Ask me to generate an auth link.";

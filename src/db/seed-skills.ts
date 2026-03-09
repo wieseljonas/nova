@@ -1,7 +1,7 @@
 /**
  * Seed initial skill notes.
  *
- * Run after migration to bootstrap Nova's core playbooks.
+ * Run after migration to bootstrap \${AGENT_NAME}'s core playbooks.
  * Idempotent: only inserts skills that don't already exist.
  *
  * Usage: tsx src/db/seed-skills.ts
@@ -10,6 +10,7 @@
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
 import { notes } from "./schema.js";
+import { AGENT_NAME } from "../config.js";
 
 const connectionString = process.env.DATABASE_URL;
 

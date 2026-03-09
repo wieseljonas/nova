@@ -1,11 +1,12 @@
 /**
- * Nova v0 — Entry point
+ * \${AGENT_NAME} v0 — Entry point
  *
  * For local development: runs the Hono app on port 3000.
  * For Vercel: the app is exported from app.ts and used by the API route.
  */
 
 import app from "./app.js";
+import { AGENT_NAME } from "./config.js";
 
 const port = parseInt(process.env.PORT || "3000");
 
@@ -13,7 +14,7 @@ const port = parseInt(process.env.PORT || "3000");
 if (process.env.NODE_ENV !== "production") {
   const { serve } = await import("@hono/node-server");
   serve({ fetch: app.fetch, port }, () => {
-    console.log(`\n  🔮 Nova is listening on http://localhost:${port}\n`);
+    console.log(`\n  🔮 \${AGENT_NAME} is listening on http://localhost:${port}\n`);
   });
 }
 

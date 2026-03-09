@@ -111,7 +111,7 @@ async function createBaseOAuth2Client() {
 
 /**
  * Get an authenticated OAuth2Client for a given user.
- * No args = Nova's own token (U0AFEC1C69F). Pass a userId for per-user tokens.
+ * No args = \${AGENT_NAME}'s own token (U0AFEC1C69F). Pass a userId for per-user tokens.
  */
 export async function getOAuth2Client(userId?: string) {
   const resolvedUserId = userId || process.env.AURA_BOT_USER_ID || "aura";
@@ -126,7 +126,7 @@ export async function getOAuth2Client(userId?: string) {
 }
 
 /**
- * Returns an authenticated Gmail client for Nova, or null if credentials are missing.
+ * Returns an authenticated Gmail client for \${AGENT_NAME}, or null if credentials are missing.
  */
 export async function getGmailClient() {
   const auth = await getOAuth2Client();
@@ -404,7 +404,7 @@ function extractAttachments(
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Send an email as a specific user (or Nova by default).
+ * Send an email as a specific user (or \${AGENT_NAME} by default).
  * When userId is provided, uses getGmailClientForUser(); otherwise falls back to getGmailClient().
  */
 export async function sendEmail(
@@ -463,7 +463,7 @@ export async function sendEmail(
   };
 }
 
-// ── Shared helpers (DRY: used by both Nova and user-facing functions) ───────
+// ── Shared helpers (DRY: used by both \${AGENT_NAME} and user-facing functions) ───────
 
 async function listEmailsWithClient(
   gmailClient: any,
@@ -713,7 +713,7 @@ export interface DraftSummary {
 
 /**
  * Get a refresh token for a specific Slack user from the oauth_tokens table.
- * Returns null if the user has not authorized Nova.
+ * Returns null if the user has not authorized \${AGENT_NAME}.
  */
 export async function getUserRefreshToken(
   userId: string,

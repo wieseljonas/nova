@@ -405,7 +405,7 @@ export function createEmailTools(context?: ScheduleContext) {
             return {
               ok: false,
               error: user_name
-                ? `No calendar access for '${user_name}'. They may need to authorize Nova via OAuth first.`
+                ? `No calendar access for '${user_name}'. They may need to authorize ${AGENT_NAME} via OAuth first.`
                 : context?.userId
                   ? "You need to connect your Google account first. Ask me to generate an auth link."
                   : "Calendar is not configured. The OAuth token may need calendar scopes.",

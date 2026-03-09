@@ -14,6 +14,7 @@ import { inArray, eq } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { logger } from "../lib/logger.js";
 import { getMainModelId } from "../lib/ai.js";
+import { AGENT_NAME } from "../config.js";
 
 export interface AssembledPrompt {
   /** Stable across all requests: personality + self-directive + notes-index + skill-index (cached globally) */
@@ -112,7 +113,7 @@ export async function assemblePrompt(
   ]);
 
   // Format conversation context from live Slack data (already fetched by pipeline).
-  // Include channel-history fallback for DMs, threaded messages, and when Nova
+  // Include channel-history fallback for DMs, threaded messages, and when \${AGENT_NAME}
   // is recently active in the channel (Tier 3) — otherwise the response LLM
   // would have no conversation context despite the shouldRespond gate seeing it.
   const useChannelFallback =

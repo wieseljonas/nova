@@ -149,7 +149,7 @@ const extractedMemoriesSchema = z.object({
       shareable: z
         .boolean()
         .describe(
-          "True only if the user explicitly asked Nova to share this info with someone specific",
+          "True only if the user explicitly asked \${AGENT_NAME} to share this info with someone specific",
         )
         .default(false),
     }),

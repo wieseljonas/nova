@@ -11,6 +11,7 @@ import {
 import { getFastModel } from "../lib/ai.js";
 import { logger } from "../lib/logger.js";
 import { ensurePersonLinked } from "../lib/person-resolution.js";
+import { AGENT_NAME } from "../config.js";
 
 /**
  * Get or create a user profile.
@@ -165,7 +166,7 @@ Analyze the user's message style:
 
 Also extract any new facts you can identify — role, team, interests, personal details, or preferences.
 Only include new facts that are clearly stated or strongly implied. Don't speculate.`,
-      prompt: `User message: ${userMessage}\n\nNova's response: ${assistantResponse}`,
+      prompt: `User message: ${userMessage}\n\n\${AGENT_NAME}'s response: ${assistantResponse}`,
     });
 
     if (!object) {

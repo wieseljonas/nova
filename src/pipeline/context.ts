@@ -69,9 +69,9 @@ export interface MessageContext {
   messageTs: string;
   /** Whether this is a DM */
   isDm: boolean;
-  /** Whether Nova was explicitly mentioned (@Nova) */
+  /** Whether the agent was explicitly mentioned (@the agent) */
   isMentioned: boolean;
-  /** Whether Nova was addressed by name */
+  /** Whether the agent was addressed by name */
   isAddressedByName: boolean;
   /** When set, this message is a Slackbot notification about a Slack List item */
   slackListItemContext?: SlackListItemContext;
@@ -132,12 +132,13 @@ export function buildMessageContext(
   // Determine channel type
   const channelType = resolveChannelType(event);
 
-  // Check if Nova was mentioned
+  // Check if the agent was mentioned
   const mentionPattern = new RegExp(`<@${botUserId}>`, "g");
   const isMentioned = mentionPattern.test(text);
 
   // Check if addressed by name (case-insensitive agent name at start or with punctuation)
-  const isAddressedByName = new RegExp(`\\b${AGENT_NAME}[,:]?\\s`, 'i').test(text) || new RegExp(`\\b${AGENT_NAME}[?!.]?\\s*$`, 'i').test(text);
+  const escapedName = AGENT_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const isAddressedByName = new RegExp(`\\b${escapedName}[,:]?\\s`, 'i').test(text) || new RegExp(`\\b${escapedName}[?!.]?\\s*$`, 'i').test(text);
 
   // Strip the @mention from the text
   const cleanText = text.replace(mentionPattern, "").trim();
@@ -171,23 +172,23 @@ export interface ShouldRespondResult {
 
 
 /**
- * Determine if Nova should respond to this message (Tiers 2–4).
+ * Determine if the agent should respond to this message (Tiers 2–4).
  *
  * Tier 1 (DMs, explicit @mention, addressed by name) is handled inline
  * by the pipeline before this function is called — see `runPipeline` in
  * `index.ts`. This function is only invoked when Tier 1 did NOT match.
  *
  * Tiers handled here:
- * 2. LLM gate: Nova is a thread participant or it's their thread (fail-open)
- * 3. LLM gate: Nova posted recently in the channel (fail-closed)
- * 4. Cold observation: Nova monitors but hasn't been active (fail-closed, high bar)
+ * 2. LLM gate: The agent is a thread participant or it's their thread (fail-open)
+ * 3. LLM gate: The agent posted recently in the channel (fail-closed)
+ * 4. Cold observation: the agent monitors but hasn't been active (fail-closed, high bar)
  */
 export async function shouldRespond(
   context: MessageContext,
   conversation: ConversationContext,
   alwaysProcessChannels: Set<string>,
 ): Promise<ShouldRespondResult> {
-  // Tier 2: Nova is a thread participant or it's their thread
+  // Tier 2: The agent is a thread participant or it's their thread
   if (conversation.isAuraParticipant || conversation.isAuraThread) {
     const shouldReply = await llmShouldRespond(context, conversation, true);
     return {
@@ -196,7 +197,7 @@ export async function shouldRespond(
     };
   }
 
-  // Tier 3: Nova posted recently in the channel (non-threaded)
+  // Tier 3: The agent posted recently in the channel (non-threaded)
   if (conversation.auraRecentlyActive) {
     const shouldReply = await llmShouldRespond(context, conversation, false);
     return {
@@ -210,7 +211,7 @@ export async function shouldRespond(
     return { respond: true, reason: "always_process_channel" };
   }
 
-  // Tier 4: Cold observation — Nova is in the channel but hasn't been active.
+  // Tier 4: Cold observation — The agent is in the channel but hasn't been active.
   // Use a conservative LLM gate (fail-closed, high bar).
   const shouldReply = await llmShouldRespond(context, conversation, false, true);
   return {

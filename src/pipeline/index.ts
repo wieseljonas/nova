@@ -33,6 +33,7 @@ import { logger } from "../lib/logger.js";
 import { logError } from "../lib/error-logger.js";
 import { recordPipelineMetrics, recordError } from "../lib/metrics.js";
 import type { SlackEvent } from "./context.js";
+import { AGENT_NAME } from "../config.js";
 
 /** Maximum message length we'll process (characters). Slack max is ~40k. */
 const MAX_MESSAGE_LENGTH = 8000;
@@ -223,7 +224,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     }
 
     // Set assistant thread status — triggers the shimmer animation on
-    // Nova's name and shows a loading indicator while processing.
+    // \${AGENT_NAME}'s name and shows a loading indicator while processing.
     // Requires the `assistant:write` scope (enabled via Agents & AI Apps
     // toggle in Slack app settings). Status auto-clears on reply.
     try {
@@ -562,7 +563,7 @@ async function runBackgroundTasks(params: {
       metadata: buildMessageMetadata(event),
     });
 
-    // Store Nova's response with a pseudo-timestamp
+    // Store \${AGENT_NAME}'s response with a pseudo-timestamp
     const assistantTs = `${context.messageTs}-aura`;
     await storeMessage({
       slackTs: assistantTs,

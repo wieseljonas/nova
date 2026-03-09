@@ -6,6 +6,7 @@ import { notes } from "../db/schema.js";
 import type { ScheduleContext } from "../db/schema.js";
 import { isAdmin } from "../lib/permissions.js";
 import { logger } from "../lib/logger.js";
+import { AGENT_NAME } from "../config.js";
 
 const DEFAULT_REPO = process.env.DEFAULT_GITHUB_REPO ?? "wieseljonas/nova";
 
@@ -17,7 +18,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
   return {
     dispatch_cursor_agent: defineTool({
       description:
-        "Dispatch an async Cursor Cloud Agent to work on a code task in the Nova repo. " +
+        "Dispatch an async Cursor Cloud Agent to work on a code task in the \${AGENT_NAME} repo. " +
         "Use for complex multi-file changes that would take >5 minutes in the sandbox (refactors, new features, multi-step bug fixes). " +
         "Do NOT use for simple one-line fixes or tasks that run_command handles in <2 minutes. " +
         "The agent runs in the background (3-30 min), creates a branch, makes changes, opens a PR, and results arrive via webhook DM. " +
@@ -89,12 +90,12 @@ export function createCursorAgentTools(context?: ScheduleContext) {
               ? `\n\nKey files to focus on:\n${key_files.map((f) => `- ${f}`).join("\n")}`
               : "";
 
-          const isNovaRepo = repo === DEFAULT_REPO;
-          const repoDescription = isNovaRepo
-            ? `This is the Nova project (github.com/${repo}) — a Slack AI assistant built with TypeScript, Hono, Vercel serverless, AI SDK v6, and PostgreSQL.`
+          const isAgentRepo = repo === DEFAULT_REPO;
+          const repoDescription = isAgentRepo
+            ? `This is the \${AGENT_NAME} project (github.com/${repo}) — a Slack AI assistant built with TypeScript, Hono, Vercel serverless, AI SDK v6, and PostgreSQL.`
             : `Repository: github.com/${repo}`;
 
-          const instructions = isNovaRepo
+          const instructions = isAgentRepo
             ? [
                 `- Use \`inputSchema\` (not \`parameters\`) for AI SDK v6 tools`,
                 `- Use .js extensions in imports (ESM with "type": "module")`,

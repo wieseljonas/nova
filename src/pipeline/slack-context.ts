@@ -45,11 +45,11 @@ export interface ConversationContext {
   thread: SlackThreadMessage[] | null;
   /** Recent top-level channel/DM messages (for non-threaded context). */
   recentMessages: SlackThreadMessage[];
-  /** Whether Nova has replied in the current thread. */
+  /** Whether the agent has replied in the current thread. */
   isAuraParticipant: boolean;
-  /** Whether the thread parent message is Nova's. */
+  /** Whether the thread parent message is the agent's. */
   isAuraThread: boolean;
-  /** Whether Nova posted recently in the channel (within 1h, for non-threaded context). */
+  /** Whether the agent posted recently in the channel (within 1h, for non-threaded context). */
   auraRecentlyActive: boolean;
 }
 
@@ -201,12 +201,12 @@ export async function fetchConversationContext(
 
       result.thread = threadMessages;
 
-      // Check participation: did Nova reply in this thread?
+      // Check participation: did the agent reply in this thread?
       result.isAuraParticipant = threadMessages.some(
         (m) => m.isBot && m.ts !== threadTs,
       );
 
-      // Check if the parent message (first in the array) is Nova's
+      // Check if the parent message (first in the array) is the agent's
       if (threadMessages.length > 0 && threadMessages[0].isBot) {
         result.isAuraThread = true;
       }
@@ -241,7 +241,7 @@ export async function fetchConversationContext(
         ...(toolIO?.length && { toolIO }),
       });
 
-      // Check if Nova posted in the channel within the last hour
+      // Check if the agent posted in the channel within the last hour
       if (isBot && msg.ts && parseFloat(msg.ts) > oneHourAgo) {
         result.auraRecentlyActive = true;
       }

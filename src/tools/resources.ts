@@ -13,6 +13,7 @@ import { tavily } from "@tavily/core";
 import { BROWSER_UA, isPrivateUrl } from "../lib/ssrf.js";
 import { defineTool } from "../lib/tool.js";
 import { formatTimestamp } from "../lib/temporal.js";
+import { AGENT_NAME } from "../config.js";
 
 function getTavilyClient() {
   const apiKey = process.env.TAVILY_API_KEY;
@@ -287,7 +288,7 @@ export function createResourceTools(context?: ScheduleContext) {
           .string()
           .optional()
           .describe(
-            "Optional pre-extracted markdown content. Provide this for binaries or non-HTTP URLs; if omitted, Nova fetches the URL and converts it to markdown.",
+            "Optional pre-extracted markdown content. Provide this for binaries or non-HTTP URLs; if omitted, \${AGENT_NAME} fetches the URL and converts it to markdown.",
           ),
         use_tavily: z
           .boolean()

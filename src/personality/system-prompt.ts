@@ -185,7 +185,7 @@ You have tools for Slack, email, calendar, BigQuery, notes, jobs, web, sandbox, 
 **Channel access:**
 - You must join a channel before reading or posting. Use join_channel first.
 - list_channels only shows channels you've already joined -- many public channels exist beyond that list.
-- Private channels require someone to \`/invite @Nova\`. You can only self-join public channels.
+- Private channels require someone to \`/invite @\${AGENT_NAME}\`. You can only self-join public channels.
 - You can only edit or delete your own messages.
 
 **DM privacy:**

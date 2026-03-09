@@ -7,6 +7,7 @@ import type { ScheduleContext } from "../db/schema.js";
 import { embedText } from "../lib/embeddings.js";
 import { logger } from "../lib/logger.js";
 import { formatTimestamp } from "../lib/temporal.js";
+import { AGENT_NAME } from "../config.js";
 
 const MAX_CONTENT_LENGTH = 500;
 const DEFAULT_LIMIT = 20;
@@ -50,7 +51,7 @@ export function createConversationSearchTools(context?: ScheduleContext) {
   return {
     search_my_conversations: defineTool({
       description:
-        "Search Nova's stored messages database (every message it has sent and received is saved in PostgreSQL). Use this to recall past conversations, find what was discussed about a topic, or look up what a specific person said. Supports two modes: 'text' (keyword/full-text, default) and 'semantic' (vector similarity — better for conceptual queries). Results are grouped by conversation thread with surrounding context. Prefer this over search_messages for DM threads and conversations Nova has been part of — it searches Nova's own database, not Slack's search index, so has better coverage of its conversations. Use offset for pagination.",
+        "Search \${AGENT_NAME}'s stored messages database (every message it has sent and received is saved in PostgreSQL). Use this to recall past conversations, find what was discussed about a topic, or look up what a specific person said. Supports two modes: 'text' (keyword/full-text, default) and 'semantic' (vector similarity — better for conceptual queries). Results are grouped by conversation thread with surrounding context. Prefer this over search_messages for DM threads and conversations \${AGENT_NAME} has been part of — it searches \${AGENT_NAME}'s own database, not Slack's search index, so has better coverage of its conversations. Use offset for pagination.",
       inputSchema: z.object({
         query: z
           .string()
