@@ -1,5 +1,6 @@
 {
   "installCommand": "npm install",
+  "buildCommand": "tsc && tsx src/db/migrate.ts",
   "framework": null,
   "regions": ["fra1"],
   "functions": {
