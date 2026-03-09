@@ -547,10 +547,11 @@ app.post("/api/slack/interactions", async (c) => {
               await publishHomeTab(slackClient, userId);
             } catch (err) {
               recordError("interactions.api_credential_delete", err, { userId, credId });
+              const errMsg = err instanceof Error ? err.message : String(err);
               await slackClient.chat.postEphemeral({
                 channel: userId,
                 user: userId,
-                text: `:x: Failed to delete credential. Please try again.`,
+                text: `:x: Failed to delete credential: ${errMsg}`,
               }).catch(() => {});
             }
           })();
