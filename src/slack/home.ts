@@ -388,12 +388,11 @@ function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
       {
         type: "input",
         block_id: "cred_username_block",
-        optional: true,
         label: { type: "plain_text", text: "Username" },
         element: {
           type: "plain_text_input",
           action_id: "cred_username",
-          placeholder: { type: "plain_text", text: "Optional — leave blank for API-key-only basic auth" },
+          placeholder: { type: "plain_text", text: "e.g. admin or user@example.com" },
         },
       },
       {

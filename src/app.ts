@@ -722,9 +722,9 @@ function extractCredentialValue(
       return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
     }
   } else if (authScheme === "basic") {
-    const username = values?.cred_username_block?.cred_username?.value ?? "";
+    const username = values?.cred_username_block?.cred_username?.value;
     const password = values?.cred_password_block?.cred_password?.value;
-    if (password) {
+    if (username && password) {
       return JSON.stringify({ username, password });
     }
   } else if (authScheme === "header" || authScheme === "query") {
