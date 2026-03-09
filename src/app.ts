@@ -35,6 +35,7 @@ import crypto from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
 import { notes, feedback } from "./db/schema.js";
+import { AGENT_NAME } from "./config.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ export const app = new Hono();
 // Health check
 app.get("/", (c) => {
   return c.json({
-    name: "Nova",
+    name: AGENT_NAME,
     version: "0.1.0",
     status: "alive",
   });

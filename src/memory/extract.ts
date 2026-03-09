@@ -7,6 +7,7 @@ import { logger } from "../lib/logger.js";
 import { getUserList } from "../tools/slack.js";
 import type { NewMemory } from "../db/schema.js";
 import type { ChannelType } from "../pipeline/context.js";
+import { AGENT_NAME } from "../config.js";
 
 // ── User ID Normalization ───────────────────────────────────────────────────
 
@@ -173,8 +174,8 @@ Types of memories to extract:
 Rules:
 - Be concise — each memory should be one clear sentence.
 - Include the person's name or Slack user ID when relevant.
-- Don't extract things Nova already knows (if they're in the context).
-- If the user explicitly asks Nova to tell someone something, mark that memory as shareable.
+- Don't extract things ${AGENT_NAME} already knows (if they're in the context).
+- If the user explicitly asks ${AGENT_NAME} to tell someone something, mark that memory as shareable.
 - Return an empty array if there's nothing worth remembering.`;
 
 interface ExtractionContext {
@@ -194,7 +195,7 @@ export async function extractMemories(context: ExtractionContext): Promise<void>
   const start = Date.now();
 
   try {
-    const conversationText = `User (${context.displayName || context.userId}): ${context.userMessage}\n\nNova: ${context.assistantResponse}`;
+    const conversationText = `User (${context.displayName || context.userId}): ${context.userMessage}\n\n${AGENT_NAME}: ${context.assistantResponse}`;
 
     const model = await getFastModel();
 

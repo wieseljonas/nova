@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { logger } from "./logger.js";
+import { AGENT_NAME } from "../config.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -73,11 +74,11 @@ const SCOPES = [
 
 const EMAIL_SIGNATURE_HTML = `
 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-family: Arial, sans-serif; font-size: 13px; color: #666;">
-  <strong style="color: #333;">Nova</strong> &middot; AI Team Member<br/>
+  <strong style="color: #333;">${AGENT_NAME}</strong> &middot; AI Team Member<br/>
   <a href="${process.env.AURA_WEBSITE_URL || ''}" style="color: #0066cc; text-decoration: none;">${process.env.COMPANY_NAME || 'Aura'}</a>
 </div>`.trim();
 
-const EMAIL_SIGNATURE_TEXT = `\n--\nAura · AI Team Member\n${process.env.COMPANY_NAME || ''} · ${process.env.AURA_WEBSITE_URL || ''}`.trimEnd();
+const EMAIL_SIGNATURE_TEXT = `\n--\n${AGENT_NAME} · AI Team Member\n${process.env.COMPANY_NAME || ''} · ${process.env.AURA_WEBSITE_URL || ''}`.trimEnd();
 
 function textToHtml(text: string): string {
   return text

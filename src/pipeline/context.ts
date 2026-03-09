@@ -4,6 +4,7 @@ import { getFastModel, withCacheControl } from "../lib/ai.js";
 import type { ConversationContext, SlackThreadMessage } from "./slack-context.js";
 import { logger } from "../lib/logger.js";
 import { resolveChannelById } from "../tools/slack.js";
+import { AGENT_NAME } from "../config.js";
 
 // ── Slack Event Types ────────────────────────────────────────────────────────
 // Minimal local types — replaces the @slack/bolt dependency that was only used
@@ -135,8 +136,8 @@ export function buildMessageContext(
   const mentionPattern = new RegExp(`<@${botUserId}>`, "g");
   const isMentioned = mentionPattern.test(text);
 
-  // Check if addressed by name (case-insensitive "Nova" at start or "Nova," anywhere)
-  const isAddressedByName = /\bnova[,:]?\s/i.test(text) || /\bnova[?!.]?\s*$/i.test(text);
+  // Check if addressed by name (case-insensitive agent name at start or with punctuation)
+  const isAddressedByName = new RegExp(`\\b${AGENT_NAME}[,:]?\\s`, 'i').test(text) || new RegExp(`\\b${AGENT_NAME}[?!.]?\\s*$`, 'i').test(text);
 
   // Strip the @mention from the text
   const cleanText = text.replace(mentionPattern, "").trim();
@@ -220,52 +221,52 @@ export async function shouldRespond(
 
 // ── LLM Gate ─────────────────────────────────────────────────────────────────
 
-const SHOULD_RESPOND_PROMPT_PARTICIPANT = `You are deciding whether Nova (a Slack bot and team assistant) should respond to the latest message.
+const SHOULD_RESPOND_PROMPT_PARTICIPANT = `You are deciding whether ${AGENT_NAME} (a Slack bot and team assistant) should respond to the latest message.
 
-Nova is already a participant in this conversation (they have sent messages before).
+${AGENT_NAME} is already a participant in this conversation (they have sent messages before).
 
 Rules:
-- Answer RESPOND if the message asks a question, requests an action, continues a conversation that needs Nova's input, shares information Nova should acknowledge, or is clearly directed at Nova.
+- Answer RESPOND if the message asks a question, requests an action, continues a conversation that needs ${AGENT_NAME}'s input, shares information ${AGENT_NAME} should acknowledge, or is clearly directed at ${AGENT_NAME}.
 - Answer SKIP if the message is just an acknowledgment (thanks, ok, got it, thumbs up), is directed at someone else, or is something where responding would add nothing.
 - When in doubt, lean toward RESPOND — it's better to be helpful than to ignore someone.
 
 Answer with a single word: RESPOND or SKIP.`;
 
-const SHOULD_RESPOND_PROMPT_RECENTLY_ACTIVE = `You are deciding whether Nova (a Slack bot and team assistant) should respond to the latest message.
+const SHOULD_RESPOND_PROMPT_RECENTLY_ACTIVE = `You are deciding whether ${AGENT_NAME} (a Slack bot and team assistant) should respond to the latest message.
 
-Nova has been active in this channel recently, but is NOT necessarily a participant in this specific conversation or thread.
+${AGENT_NAME} has been active in this channel recently, but is NOT necessarily a participant in this specific conversation or thread.
 
 Rules:
-- Answer RESPOND if the message asks a question, requests an action, shares information Nova should acknowledge, or is clearly directed at Nova.
-- Answer SKIP if the message is just an acknowledgment (thanks, ok, got it, thumbs up), is directed at someone else, is part of an ongoing conversation between other people that Nova is not involved in, or is something where responding would add nothing.
-- When in doubt, lean toward SKIP — Nova should not intrude on conversations she's not part of.
+- Answer RESPOND if the message asks a question, requests an action, shares information ${AGENT_NAME} should acknowledge, or is clearly directed at ${AGENT_NAME}.
+- Answer SKIP if the message is just an acknowledgment (thanks, ok, got it, thumbs up), is directed at someone else, is part of an ongoing conversation between other people that ${AGENT_NAME} is not involved in, or is something where responding would add nothing.
+- When in doubt, lean toward SKIP — ${AGENT_NAME} should not intrude on conversations she's not part of.
 
 Answer with a single word: RESPOND or SKIP.`;
 
-const SHOULD_RESPOND_PROMPT_COLD_OBSERVATION = `You are deciding whether Nova (a Slack bot and team assistant) should respond to this message in a channel she monitors but hasn't recently participated in.
+const SHOULD_RESPOND_PROMPT_COLD_OBSERVATION = `You are deciding whether ${AGENT_NAME} (a Slack bot and team assistant) should respond to this message in a channel she monitors but hasn't recently participated in.
 
-This is COLD observation — Nova is passively watching. The bar to respond is HIGH.
+This is COLD observation — ${AGENT_NAME} is passively watching. The bar to respond is HIGH.
 
 Answer RESPOND only if:
 - Someone is reporting a bug, error, or something broken
 - There's an urgent issue that needs immediate attention
-- Someone is explicitly asking a question Nova could answer (data, metrics, status)
-- The message directly relates to Nova's active work (bug triage, OKRs, team ops)
+- Someone is explicitly asking a question ${AGENT_NAME} could answer (data, metrics, status)
+- The message directly relates to ${AGENT_NAME}'s active work (bug triage, OKRs, team ops)
 
 Answer SKIP for:
 - General conversation, banter, casual chat
 - Messages directed at specific people
 - Status updates that don't need a response
-- Anything where Nova jumping in uninvited would be annoying
+- Anything where ${AGENT_NAME} jumping in uninvited would be annoying
 
 When in doubt, SKIP. Being quiet is better than being noisy.
 
 Answer with a single word: RESPOND or SKIP.`;
 
 /**
- * Ask the fast model (Haiku) whether Nova should respond to a message.
+ * Ask the fast model (Haiku) whether ${AGENT_NAME} should respond to a message.
  *
- * @param isParticipant - true if Nova is a direct participant in this thread/conversation (Tier 2),
+ * @param isParticipant - true if ${AGENT_NAME} is a direct participant in this thread/conversation (Tier 2),
  *   false if she's only recently active in the channel (Tier 3) or cold-observing (Tier 4).
  * @param coldObservation - true for Tier 4 cold observation (highest bar, most conservative).
  *
@@ -301,7 +302,7 @@ async function llmShouldRespond(
         ? SHOULD_RESPOND_PROMPT_PARTICIPANT
         : SHOULD_RESPOND_PROMPT_RECENTLY_ACTIVE;
 
-    const userMessage = `Recent conversation:\n${conversationText}\n\nLatest message from ${senderName}:\n${context.text}\n\nShould Nova respond?`;
+    const userMessage = `Recent conversation:\n${conversationText}\n\nLatest message from ${senderName}:\n${context.text}\n\nShould ${AGENT_NAME} respond?`;
 
     const model = await getFastModel();
     const result = await generateText({

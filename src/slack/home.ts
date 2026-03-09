@@ -8,6 +8,7 @@ import {
   listGrantsForCredentials,
   getCredentialById,
 } from "../lib/api-credentials.js";
+import { AGENT_NAME } from "../config.js";
 
 // ── Model Catalog ────────────────────────────────────────────────────────────
 
@@ -637,7 +638,7 @@ export async function publishHomeTab(
     const blocks: any[] = [
       {
         type: "header",
-        text: { type: "plain_text", text: "Nova Settings" },
+        text: { type: "plain_text", text: `${AGENT_NAME} Settings` },
       },
       {
         type: "context",

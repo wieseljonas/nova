@@ -3,6 +3,7 @@ import type { WebClient } from "@slack/web-api";
 import { logger } from "../lib/logger.js";
 import { TOOL_IO_EVENT_TYPE } from "./respond.js";
 import { formatTimestamp } from "../lib/temporal.js";
+import { AGENT_NAME } from "../config.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -182,7 +183,7 @@ export async function fetchConversationContext(
         const userId = msg.user || msg.bot_id || "unknown";
         const isBot = msg.user === botUserId;
         const { name: displayName } = isBot
-          ? { name: "Nova" }
+          ? { name: AGENT_NAME }
           : await resolveDisplayName(client, userId);
         const toolCalls = isBot ? extractToolCalls((msg as any).blocks) : undefined;
         const toolIO = isBot ? extractToolIO(msg) : undefined;
@@ -225,7 +226,7 @@ export async function fetchConversationContext(
       const userId = msg.user || msg.bot_id || "unknown";
       const isBot = msg.user === botUserId;
       const { name: displayName } = isBot
-        ? { name: "Nova" }
+        ? { name: AGENT_NAME }
         : await resolveDisplayName(client, userId);
       const toolCalls = isBot ? extractToolCalls((msg as any).blocks) : undefined;
       const toolIO = isBot ? extractToolIO(msg) : undefined;

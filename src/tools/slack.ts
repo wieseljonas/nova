@@ -28,6 +28,7 @@ import { formatForSlack } from "../lib/format.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
 import { formatTimestamp } from "../lib/temporal.js";
 import { downloadSlackFile, MAX_FILE_SIZE } from "../lib/files.js";
+import { AGENT_NAME } from "../config.js";
 
 // ── Caches (per function invocation) ─────────────────────────────────────────
 
@@ -544,7 +545,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
   const tools: Record<string, any> = {
     list_channels: defineTool({
       description:
-        "List Slack channels that Nova is currently a member of (names, topics, member count). Important: this only shows channels Nova has already joined, NOT all public channels in the workspace. Many public channels exist that aren't listed here. To find or join others, use search_channels to fuzzy-search by name, or join_channel with the exact channel name.",
+        `List Slack channels that ${AGENT_NAME} is currently a member of (names, topics, member count). Important: this only shows channels ${AGENT_NAME} has already joined, NOT all public channels in the workspace. Many public channels exist that aren't listed here. To find or join others, use search_channels to fuzzy-search by name, or join_channel with the exact channel name.`,
       inputSchema: z.object({
         limit: z
           .number()
@@ -609,7 +610,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     get_channel_info: defineTool({
       description:
-        "Get detailed information about a Slack channel by name or ID. Returns the channel name, topic, purpose, privacy status, and member count. Works for any channel — not just ones Nova has joined. Use this to resolve a channel ID (like C0BNVKS77) to its human-readable name — never guess channel names or return raw IDs to users.",
+        `Get detailed information about a Slack channel by name or ID. Returns the channel name, topic, purpose, privacy status, and member count. Works for any channel — not just ones ${AGENT_NAME} has joined. Use this to resolve a channel ID (like C0BNVKS77) to its human-readable name — never guess channel names or return raw IDs to users.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -741,7 +742,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     join_channel: defineTool({
       description:
-        "Join a public Slack channel by name or ID. Nova must join a channel before it can read its history or post messages there. Only works for public channels — for private channels, someone must /invite @Nova. This tool can find and join channels that don't appear in list_channels results, since list_channels only shows channels Nova has already joined. If a channel doesn't appear in list_channels, that does NOT mean it's private or doesn't exist — try join_channel first.",
+        `Join a public Slack channel by name or ID. ${AGENT_NAME} must join a channel before it can read its history or post messages there. Only works for public channels — for private channels, someone must /invite @${AGENT_NAME}. This tool can find and join channels that don't appear in list_channels results, since list_channels only shows channels ${AGENT_NAME} has already joined. If a channel doesn't appear in list_channels, that does NOT mean it's private or doesn't exist — try join_channel first.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -800,7 +801,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     read_channel_history: defineTool({
       description:
-        "Read recent messages from a Slack channel. Includes reactions on each message. Nova must be a member of the channel — use join_channel first if needed. Use this instead of web_search for finding workspace content.",
+        `Read recent messages from a Slack channel. Includes reactions on each message. ${AGENT_NAME} must be a member of the channel — use join_channel first if needed. Use this instead of web_search for finding workspace content.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -890,7 +891,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     read_thread_replies: defineTool({
       description:
-        "Read replies from a specific thread in a channel. Works for regular channel threads and Slack List item comment threads. Use this to check what's been discussed in a thread before posting — especially for bug list item threads, to prevent duplicate comments and reference what's already been said. Nova must be a member of the channel.",
+        `Read replies from a specific thread in a channel. Works for regular channel threads and Slack List item comment threads. Use this to check what's been discussed in a thread before posting — especially for bug list item threads, to prevent duplicate comments and reference what's already been said. ${AGENT_NAME} must be a member of the channel.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -989,7 +990,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     send_channel_message: defineTool({
       description:
-        "Send a message to a Slack channel. Nova must be a member of the channel — use join_channel first if needed. Write as yourself — same personality, same tone. Don't suddenly become formal just because you're posting somewhere new.",
+        `Send a message to a Slack channel. ${AGENT_NAME} must be a member of the channel — use join_channel first if needed. Write as yourself — same personality, same tone. Don't suddenly become formal just because you're posting somewhere new.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -1228,7 +1229,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     search_messages: defineTool({
       description:
-        "Search for messages across the entire Slack workspace using Slack's search index. Supports Slack search syntax: 'in:#channel' to filter by channel, 'from:@user' to filter by sender. For DM threads and conversations Nova has been part of, prefer search_my_conversations instead — it searches Nova's stored database which has better coverage of its own conversations. Requires SLACK_USER_TOKEN.",
+        `Search for messages across the entire Slack workspace using Slack's search index. Supports Slack search syntax: 'in:#channel' to filter by channel, 'from:@user' to filter by sender. For DM threads and conversations ${AGENT_NAME} has been part of, prefer search_my_conversations instead — it searches ${AGENT_NAME}'s stored database which has better coverage of its own conversations. Requires SLACK_USER_TOKEN.`,
       inputSchema: z.object({
         query: z
           .string()
@@ -1583,7 +1584,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     list_dm_conversations: defineTool({
       description:
-        "List DM conversations Nova has had. Returns the list of users Nova has open DM channels with. Supports cursor pagination — pass the returned next_cursor in follow-up calls to paginate through ALL DM channels. Admin-only.",
+        `List DM conversations ${AGENT_NAME} has had. Returns the list of users ${AGENT_NAME} has open DM channels with. Supports cursor pagination — pass the returned next_cursor in follow-up calls to paginate through ALL DM channels. Admin-only.`,
       inputSchema: z.object({
         limit: z
           .number()
@@ -1605,7 +1606,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
             return {
               ok: false,
               error:
-                "Only admins can list all DM conversations. Use read_dm_history to check your own DM with Nova.",
+                `Only admins can list all DM conversations. Use read_dm_history to check your own DM with ${AGENT_NAME}.`,
             };
           }
 
@@ -2535,7 +2536,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     edit_message: defineTool({
       description:
-        "Edit one of Nova's own messages. Can only edit messages Nova posted — not other people's. Use to fix typos, update a posted summary, or correct information. Works in channels and DMs — pass a DM channel ID (D...) or group DM ID (G...) directly.",
+        `Edit one of ${AGENT_NAME}'s own messages. Can only edit messages ${AGENT_NAME} posted — not other people's. Use to fix typos, update a posted summary, or correct information. Works in channels and DMs — pass a DM channel ID (D...) or group DM ID (G...) directly.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -2573,7 +2574,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     delete_message: defineTool({
       description:
-        "Delete one of Nova's own messages. Can only delete messages Nova posted — not other people's. Use to clean up test posts or mistakes. Works in channels and DMs — pass a DM channel ID (D...) or group DM ID (G...) directly.",
+        `Delete one of ${AGENT_NAME}'s own messages. Can only delete messages ${AGENT_NAME} posted — not other people's. Use to clean up test posts or mistakes. Works in channels and DMs — pass a DM channel ID (D...) or group DM ID (G...) directly.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -2704,7 +2705,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
     }),
 
     remove_reaction: defineTool({
-      description: "Remove an emoji reaction Nova previously added to a message.",
+      description: `Remove an emoji reaction ${AGENT_NAME} previously added to a message.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -2795,7 +2796,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     set_channel_topic: defineTool({
       description:
-        "Set or update a channel's topic text. Nova must be a member of the channel.",
+        `Set or update a channel's topic text. ${AGENT_NAME} must be a member of the channel.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -2827,7 +2828,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     invite_to_channel: defineTool({
       description:
-        "Invite a user to a channel. Nova must be a member of the channel. Use when someone asks to pull someone into a conversation.",
+        `Invite a user to a channel. ${AGENT_NAME} must be a member of the channel. Use when someone asks to pull someone into a conversation.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -2877,7 +2878,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
     }),
 
     leave_channel: defineTool({
-      description: "Leave a channel Nova is currently a member of. Use when you no longer need to monitor a channel.",
+      description: `Leave a channel ${AGENT_NAME} is currently a member of. Use when you no longer need to monitor a channel.`,
       inputSchema: z.object({
         channel: z
           .string()
@@ -2909,7 +2910,7 @@ export function createSlackTools(client: WebClient, context?: ScheduleContext) {
 
     set_my_status: defineTool({
       description:
-        "Set Nova's own Slack status (text + emoji, optional auto-expire). Use during long-running background work to signal what you're doing (e.g. ':mag: Running morning digest'). Always set expiration_minutes so the status auto-clears when done.",
+        `Set ${AGENT_NAME}'s own Slack status (text + emoji, optional auto-expire). Use during long-running background work to signal what you're doing (e.g. ':mag: Running morning digest'). Always set expiration_minutes so the status auto-clears when done.`,
       inputSchema: z.object({
         status_text: z
           .string()

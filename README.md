@@ -106,6 +106,7 @@ Each integration degrades gracefully if unconfigured — missing keys disable fe
 
 | Integration | Env vars | What it enables |
 |------------|----------|----------------|
+| **Agent Identity** | `AGENT_NAME` | Agent's user-facing name (defaults to "Aura") |
 | [E2B](https://e2b.dev) | `E2B_API_KEY`, `E2B_TEMPLATE_ID` | Shell execution, code running, git |
 | [Tavily](https://tavily.com) | `TAVILY_API_KEY` | Web search + URL extraction |
 | [GitHub](https://github.com) | `GITHUB_TOKEN` | Issues, PRs, code review |

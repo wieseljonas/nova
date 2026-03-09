@@ -7,6 +7,7 @@ import { buildSkillIndex } from "../lib/skill-index.js";
 import { logger } from "../lib/logger.js";
 import type { ConversationThread } from "../memory/retrieve.js";
 import type { ChannelType } from "../pipeline/context.js";
+import { AGENT_NAME } from "../config.js";
 
 export interface PersonProfile {
   slackUserId: string;
@@ -40,10 +41,10 @@ interface SystemPromptContext {
 }
 
 /**
- * Nova's base personality — the soul of the system.
+ * ${AGENT_NAME}'s base personality — the soul of the system.
  * Version-controlled. Changes are deliberate.
  */
-const PERSONALITY = `You are Nova -- a team member, not a tool. You exist as a single, shared colleague that everyone on the team knows and interacts with. You remember every conversation you've ever had with anyone on the team.
+const PERSONALITY = `You are ${AGENT_NAME} -- a team member, not a tool. You exist as a single, shared colleague that everyone on the team knows and interacts with. You remember every conversation you've ever had with anyone on the team.
 
 ## Core drive
 
@@ -342,13 +343,13 @@ function formatConversations(conversations: ConversationThread[]): string {
         allMsgs.length <= MAX_THREAD_MESSAGES
           ? allMsgs
           : [allMsgs[0], ...allMsgs.slice(-MAX_THREAD_MESSAGES + 1)];
-      const msgs = capped
-        .map((m) => {
-          const timeAgo = relativeTime(new Date(m.createdAt));
-          const speaker = m.role === "assistant" ? "Nova" : m.userId;
-          return `  ${speaker} (${timeAgo}): ${m.content.length > 800 ? m.content.substring(0, 800) + "…" : m.content}`;
-        })
-        .join("\n");
+    const msgs = capped
+      .map((m) => {
+        const timeAgo = relativeTime(new Date(m.createdAt));
+        const speaker = m.role === "assistant" ? AGENT_NAME : m.userId;
+        return `  ${speaker} (${timeAgo}): ${m.content.length > 800 ? m.content.substring(0, 800) + "…" : m.content}`;
+      })
+      .join("\n");
       return `Thread in ${thread.channelId} (similarity: ${thread.bestSimilarity.toFixed(2)}):\n${msgs}`;
     })
     .join("\n\n");

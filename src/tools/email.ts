@@ -4,6 +4,7 @@ import { logger } from "../lib/logger.js";
 import { isAdmin } from "../lib/permissions.js";
 import { resolveSlackUserId, resolveEffectiveUserId } from "../lib/resolve-user.js";
 import type { ScheduleContext } from "../db/schema.js";
+import { AGENT_NAME } from "../config.js";
 
 const AURA_BOT_USER_ID = "U0AFEC1C69F";
 
@@ -17,7 +18,7 @@ export function createEmailTools(context?: ScheduleContext) {
   return {
     send_email: defineTool({
       description:
-        "Send an email. Defaults to sending from Nova's configured email address. Set user_name to send from another user's account (requires that user's OAuth access, and caller must be that user or an admin). Use for external communication, follow-ups, outreach, and reports. Never send emails without being asked or having a clear reason (job, follow-up, etc.). Body is sent as plain text — keep it professional but conversational, same tone as Slack. DM privacy applies: don't email someone's private Slack DM content to others. Supports optional file attachments (base64-encoded).",
+        `Send an email. Defaults to sending from ${AGENT_NAME}'s configured email address. Set user_name to send from another user's account (requires that user's OAuth access, and caller must be that user or an admin). Use for external communication, follow-ups, outreach, and reports. Never send emails without being asked or having a clear reason (job, follow-up, etc.). Body is sent as plain text — keep it professional but conversational, same tone as Slack. DM privacy applies: don't email someone's private Slack DM content to others. Supports optional file attachments (base64-encoded).`,
       inputSchema: z.object({
         to: z.string().describe("Recipient email address"),
         subject: z.string().describe("Email subject line"),
@@ -36,7 +37,7 @@ export function createEmailTools(context?: ScheduleContext) {
           .string()
           .optional()
           .describe(
-            "Send from this user's account instead of Nova. The display name, real name, or username, e.g. 'Joan' or '@joan'. Omit to send from Nova's configured email address.",
+            `Send from this user's account instead of ${AGENT_NAME}. The display name, real name, or username, e.g. 'Joan' or '@joan'. Omit to send from ${AGENT_NAME}'s configured email address.`,
           ),
         attachments: z
           .array(
@@ -91,7 +92,7 @@ export function createEmailTools(context?: ScheduleContext) {
           }, resolvedUserId);
 
           if (!result) {
-            return { ok: false, error: `Failed to send email: no Gmail access for the resolved user. They may need to authorize Nova via OAuth first.` };
+            return { ok: false, error: `Failed to send email: no Gmail access for the resolved user. They may need to authorize ${AGENT_NAME} via OAuth first.` };
           }
 
           logger.info("send_email tool called", {
@@ -123,7 +124,7 @@ export function createEmailTools(context?: ScheduleContext) {
     }),
 
     reply_to_email: defineTool({
-      description: "Reply to an existing email thread. Defaults to replying from Nova's configured email address. Set user_name to reply from another user's account (requires that user's OAuth access, and caller must be that user or an admin). Requires message_id and thread_id from read_user_emails or read_user_email.",
+      description: `Reply to an existing email thread. Defaults to replying from ${AGENT_NAME}'s configured email address. Set user_name to reply from another user's account (requires that user's OAuth access, and caller must be that user or an admin). Requires message_id and thread_id from read_user_emails or read_user_email.`,
       inputSchema: z.object({
         message_id: z
           .string()
@@ -136,7 +137,7 @@ export function createEmailTools(context?: ScheduleContext) {
           .string()
           .optional()
           .describe(
-            "Reply from this user's account instead of Nova. The display name, real name, or username, e.g. 'Joan' or '@joan'. Omit to reply from Nova's configured email address.",
+            `Reply from this user's account instead of ${AGENT_NAME}. The display name, real name, or username, e.g. 'Joan' or '@joan'. Omit to reply from ${AGENT_NAME}'s configured email address.`,
           ),
       }),
       execute: async ({ message_id, thread_id, body, user_name }) => {
@@ -165,7 +166,7 @@ export function createEmailTools(context?: ScheduleContext) {
           const result = await replyToEmail(message_id, thread_id, body, resolvedUserId);
 
           if (!result) {
-            return { ok: false, error: "Failed to reply to email: no Gmail access for the resolved user. They may need to authorize Nova via OAuth first." };
+            return { ok: false, error: `Failed to reply to email: no Gmail access for the resolved user. They may need to authorize ${AGENT_NAME} via OAuth first.` };
           }
 
           logger.info("reply_to_email tool called", {
@@ -467,7 +468,7 @@ export function createEmailTools(context?: ScheduleContext) {
             return {
               ok: false,
               error: user_name
-                ? `No calendar access for '${user_name}'. They may need to authorize Nova via OAuth first.`
+                ? `No calendar access for '${user_name}'. They may need to authorize ${AGENT_NAME} via OAuth first.`
                 : context?.userId
                   ? "You need to connect your Google account first. Ask me to generate an auth link."
                   : "Calendar is not configured. The OAuth token may need calendar scopes.",
@@ -533,7 +534,7 @@ export function createEmailTools(context?: ScheduleContext) {
             return {
               ok: false,
               error: user_name
-                ? `No calendar access for '${user_name}'. They may need to authorize Nova via OAuth first.`
+                ? `No calendar access for '${user_name}'. They may need to authorize ${AGENT_NAME} via OAuth first.`
                 : context?.userId
                   ? "You need to connect your Google account first. Ask me to generate an auth link."
                   : "Calendar is not configured. The OAuth token may need calendar scopes.",
@@ -576,7 +577,7 @@ export function createEmailTools(context?: ScheduleContext) {
             return {
               ok: false,
               error: user_name
-                ? `No calendar access for '${user_name}'. They may need to authorize Nova via OAuth first.`
+                ? `No calendar access for '${user_name}'. They may need to authorize ${AGENT_NAME} via OAuth first.`
                 : context?.userId
                   ? "You need to connect your Google account first. Ask me to generate an auth link."
                   : "Calendar is not configured. The OAuth token may need calendar scopes.",
@@ -636,7 +637,7 @@ export function createEmailTools(context?: ScheduleContext) {
             return {
               ok: false,
               error: user_name
-                ? `No calendar access for '${user_name}'. They may need to authorize Nova via OAuth first.`
+                ? `No calendar access for '${user_name}'. They may need to authorize ${AGENT_NAME} via OAuth first.`
                 : context?.userId
                   ? "You need to connect your Google account first. Ask me to generate an auth link."
                   : "Calendar is not configured. The OAuth token may need calendar scopes.",
@@ -664,7 +665,7 @@ export function createEmailTools(context?: ScheduleContext) {
 
 /**
  * Create tools for managing Gmail as an Executive Assistant.
- * These tools operate on behalf of specific users who have granted Nova OAuth access.
+ * These tools operate on behalf of specific users who have granted ${AGENT_NAME} OAuth access.
  * Caller identity enforcement: non-admin callers can only access their own email.
  */
 export function createGmailEATools(context?: ScheduleContext) {
@@ -673,7 +674,7 @@ export function createGmailEATools(context?: ScheduleContext) {
   return {
     create_gmail_draft: defineTool({
       description:
-        "Create a draft email in a user's Gmail account. Defaults to the caller's account. The user must have granted Nova OAuth access first. Supports optional file attachments (base64-encoded).",
+        `Create a draft email in a user's Gmail account. Defaults to the caller's account. The user must have granted ${AGENT_NAME} OAuth access first. Supports optional file attachments (base64-encoded).`,
       inputSchema: z.object({
         user_name: z
           .string()
@@ -763,7 +764,7 @@ export function createGmailEATools(context?: ScheduleContext) {
           if (!result) {
             return {
               ok: false,
-              error: `No Gmail access for the resolved user. They need to authorize Nova via the OAuth flow first.`,
+              error: `No Gmail access for the resolved user. They need to authorize ${AGENT_NAME} via the OAuth flow first.`,
             };
           }
 
@@ -786,7 +787,7 @@ export function createGmailEATools(context?: ScheduleContext) {
 
     list_gmail_drafts: defineTool({
       description:
-        "List draft emails in a user's Gmail account. Defaults to the caller's account. The user must have granted Nova OAuth access.",
+        `List draft emails in a user's Gmail account. Defaults to the caller's account. The user must have granted ${AGENT_NAME} OAuth access.`,
       inputSchema: z.object({
         user_name: z
           .string()
@@ -829,7 +830,7 @@ export function createGmailEATools(context?: ScheduleContext) {
           if (!drafts) {
             return {
               ok: false,
-              error: `No Gmail access for the resolved user. They need to authorize Nova via OAuth first.`,
+              error: `No Gmail access for the resolved user. They need to authorize ${AGENT_NAME} via OAuth first.`,
             };
           }
 
@@ -851,7 +852,7 @@ export function createGmailEATools(context?: ScheduleContext) {
 
     read_user_emails: defineTool({
       description:
-        "Read recent emails from a user's Gmail inbox. Defaults to the caller's account. The user must have granted Nova OAuth access. Supports pagination via page_token.",
+        `Read recent emails from a user's Gmail inbox. Defaults to the caller's account. The user must have granted ${AGENT_NAME} OAuth access. Supports pagination via page_token.`,
       inputSchema: z.object({
         user_name: z
           .string()
@@ -914,7 +915,7 @@ export function createGmailEATools(context?: ScheduleContext) {
           if (!result) {
             return {
               ok: false,
-              error: `No Gmail access for the resolved user. They need to authorize Nova via OAuth first.`,
+              error: `No Gmail access for the resolved user. They need to authorize ${AGENT_NAME} via OAuth first.`,
             };
           }
 
@@ -997,7 +998,7 @@ export function createGmailEATools(context?: ScheduleContext) {
 
     delete_gmail_draft: defineTool({
       description:
-        "Delete a draft email from a user's Gmail account. Defaults to the caller's account. The user must have granted Nova OAuth access.",
+        `Delete a draft email from a user's Gmail account. Defaults to the caller's account. The user must have granted ${AGENT_NAME} OAuth access.`,
       inputSchema: z.object({
         user_name: z
           .string()
@@ -1188,7 +1189,7 @@ export function createGmailEATools(context?: ScheduleContext) {
 
     generate_gmail_auth_url: defineTool({
       description:
-        "Generate a Google OAuth consent URL for a user to connect their Gmail account to Nova. DM the resulting URL to the user — they click it, authorize in Google, and their Gmail is connected for reading and drafting.",
+        `Generate a Google OAuth consent URL for a user to connect their Gmail account to ${AGENT_NAME}. DM the resulting URL to the user — they click it, authorize in Google, and their Gmail is connected for reading and drafting.`,
       inputSchema: z.object({
         user_name: z
           .string()

@@ -6,6 +6,7 @@ import { logger } from "../lib/logger.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
 import { createHeadlessAgent } from "../lib/agents.js";
 import { executionContext, PendingApprovalError } from "../lib/tool.js";
+import { AGENT_NAME } from "../config.js";
 
 const botToken = process.env.SLACK_BOT_TOKEN || "";
 const slackClient = new WebClient(botToken);
@@ -18,7 +19,7 @@ const RETRY_DELAY_MS = 30 * 60 * 1000;
 
 // ── System Prompts ───────────────────────────────────────────────────────────
 
-const JOB_SYSTEM_PROMPT = `You are Nova executing a job autonomously. You have full access to your tools.
+const JOB_SYSTEM_PROMPT = `You are ${AGENT_NAME} executing a job autonomously. You have full access to your tools.
 
 Rules:
 - Execute the task described below. Use your tools to read channels, post messages, look up users, etc.
@@ -32,7 +33,7 @@ Rules:
 - Be concise. Digests and summaries, not essays.
 - Do NOT respond conversationally. Just execute the task and report.`;
 
-const CONTINUATION_SYSTEM_PROMPT = `You are Nova resuming a multi-step task. Your accumulated progress and context are below.
+const CONTINUATION_SYSTEM_PROMPT = `You are ${AGENT_NAME} resuming a multi-step task. Your accumulated progress and context are below.
 
 Rules:
 - Continue from where you left off. The plan note contains your progress, next steps, and context.
