@@ -764,6 +764,19 @@ function extractCredentialValue(
           }
         })();
         waitUntil(addPromise);
+      } else if (name && !value) {
+        // Value extraction failed -- return validation error to the modal
+        console.warn(`[credential-add] value extraction failed for scheme=${authScheme}, user=${userId}, name=${name}`);
+        const errorBlock = authScheme === "basic" ? "cred_password_block"
+          : authScheme === "oauth_client" ? "cred_client_id_block"
+          : authScheme === "header" || authScheme === "query" ? "cred_secret_block"
+          : "cred_value_block";
+        return c.json({
+          response_action: "errors",
+          errors: {
+            [errorBlock]: "Required field is missing. Please fill in all required fields.",
+          },
+        });
       }
     }
 
