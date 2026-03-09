@@ -696,6 +696,37 @@ app.post("/api/slack/interactions", async (c) => {
       }
     }
 
+
+/** Extract credential value from modal state based on auth scheme */
+function extractCredentialValue(
+  values: Record<string, any> | undefined,
+  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client"
+): string | undefined {
+  if (authScheme === "oauth_client") {
+    const clientId = values?.cred_client_id_block?.cred_client_id?.value;
+    const clientSecret = values?.cred_client_secret_block?.cred_client_secret?.value;
+    const tokenUrl = values?.cred_token_url_block?.cred_token_url?.value;
+    if (clientId && clientSecret && tokenUrl) {
+      return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
+    }
+  } else if (authScheme === "basic") {
+    const username = values?.cred_username_block?.cred_username?.value;
+    const password = values?.cred_password_block?.cred_password?.value;
+    if (username && password) {
+      return JSON.stringify({ username, password });
+    }
+  } else if (authScheme === "header" || authScheme === "query") {
+    const key = values?.cred_key_block?.cred_key?.value;
+    const secret = values?.cred_secret_block?.cred_secret?.value;
+    if (key && secret) {
+      return JSON.stringify({ key, secret });
+    }
+  } else {
+    return values?.cred_value_block?.cred_value?.value;
+  }
+  return undefined;
+}
+
     if (callbackId === "api_credential_add_submit" && userId) {
       const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
       const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
@@ -706,39 +737,7 @@ app.post("/api/slack/interactions", async (c) => {
         | "query"
         | "oauth_client";
 
-      let value: string | undefined;
-      if (authScheme === "oauth_client") {
-        const clientId =
-          payload.view?.state?.values?.cred_client_id_block?.cred_client_id?.value;
-        const clientSecret =
-          payload.view?.state?.values?.cred_client_secret_block?.cred_client_secret?.value;
-        const tokenUrl =
-          payload.view?.state?.values?.cred_token_url_block?.cred_token_url?.value;
-        if (clientId && clientSecret && tokenUrl) {
-          value = JSON.stringify({
-            client_id: clientId,
-            client_secret: clientSecret,
-            token_url: tokenUrl,
-          });
-        }
-      } else if (authScheme === "basic") {
-        const username =
-          payload.view?.state?.values?.cred_username_block?.cred_username?.value;
-        const password =
-          payload.view?.state?.values?.cred_password_block?.cred_password?.value;
-        if (username && password) {
-          value = JSON.stringify({ username, password });
-        }
-      } else if (authScheme === "header" || authScheme === "query") {
-        const key = payload.view?.state?.values?.cred_key_block?.cred_key?.value;
-        const secret =
-          payload.view?.state?.values?.cred_secret_block?.cred_secret?.value;
-        if (key && secret) {
-          value = JSON.stringify({ key, secret });
-        }
-      } else {
-        value = payload.view?.state?.values?.cred_value_block?.cred_value?.value;
-      }
+      const value = extractCredentialValue(payload.view?.state?.values, authScheme);
 
       if (name && value) {
 
@@ -764,39 +763,7 @@ app.post("/api/slack/interactions", async (c) => {
         | "query"
         | "oauth_client";
 
-      let value: string | undefined;
-      if (authScheme === "oauth_client") {
-        const clientId =
-          payload.view?.state?.values?.cred_client_id_block?.cred_client_id?.value;
-        const clientSecret =
-          payload.view?.state?.values?.cred_client_secret_block?.cred_client_secret?.value;
-        const tokenUrl =
-          payload.view?.state?.values?.cred_token_url_block?.cred_token_url?.value;
-        if (clientId && clientSecret && tokenUrl) {
-          value = JSON.stringify({
-            client_id: clientId,
-            client_secret: clientSecret,
-            token_url: tokenUrl,
-          });
-        }
-      } else if (authScheme === "basic") {
-        const username =
-          payload.view?.state?.values?.cred_username_block?.cred_username?.value;
-        const password =
-          payload.view?.state?.values?.cred_password_block?.cred_password?.value;
-        if (username && password) {
-          value = JSON.stringify({ username, password });
-        }
-      } else if (authScheme === "header" || authScheme === "query") {
-        const key = payload.view?.state?.values?.cred_key_block?.cred_key?.value;
-        const secret =
-          payload.view?.state?.values?.cred_secret_block?.cred_secret?.value;
-        if (key && secret) {
-          value = JSON.stringify({ key, secret });
-        }
-      } else {
-        value = payload.view?.state?.values?.cred_value_block?.cred_value?.value;
-      }
+      const value = extractCredentialValue(payload.view?.state?.values, authScheme);
 
       if (credentialId && value) {
         const updatePromise = (async () => {

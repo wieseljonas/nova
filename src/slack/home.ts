@@ -7,6 +7,7 @@ import {
   listApiCredentials,
   listGrantsForCredentials,
   getCredentialById,
+  type AuthScheme,
 } from "../lib/api-credentials.js";
 
 // ── Model Catalog ────────────────────────────────────────────────────────────
@@ -270,7 +271,6 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
 
 // ── User Credential Modals ──────────────────────────────────────────────────
 
-type AuthScheme = "bearer" | "basic" | "header" | "query" | "oauth_client";
 
 function buildAuthSchemeBlock(authScheme: AuthScheme) {
   return {
@@ -397,7 +397,7 @@ function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
         element: {
           type: "plain_text_input",
           action_id: "cred_password",
-          sensitive: true,
+          // Note: Slack Block Kit does not support password masking on plain_text_input
           placeholder: { type: "plain_text", text: "Paste password or API key" },
         },
       },

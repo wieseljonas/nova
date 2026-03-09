@@ -115,6 +115,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                   basicParsed = JSON.parse(credResult.value);
                 } catch {
                   return {
+                    ok: false as const,
                     error: "basic credential value must be JSON {username, password}",
                   };
                 }

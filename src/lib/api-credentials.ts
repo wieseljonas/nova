@@ -41,7 +41,7 @@ type AuditAction =
   | "use"
   | "expired_access_attempt";
 
-type AuthScheme = "bearer" | "basic" | "header" | "query" | "oauth_client";
+export type AuthScheme = "bearer" | "basic" | "header" | "query" | "oauth_client";
 
 async function audit(
   credentialId: string | null,
@@ -159,7 +159,7 @@ export async function storeApiCredential(
         throw new Error(`${authScheme} value must contain key and secret`);
       }
     } catch (e: any) {
-      if (e.message.includes("key") || e.message.includes("secret")) throw e;
+      if (!(e instanceof SyntaxError)) throw e;
       throw new Error(`${authScheme} value must be valid JSON with key and secret keys`);
     }
   }
