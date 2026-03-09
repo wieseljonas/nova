@@ -1,3 +1,4 @@
+import { isAdmin } from "./permissions.js";
 import { eq, and, or, isNull, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
@@ -463,7 +464,7 @@ export async function listGrantsForCredentials(
 export async function deleteApiCredential(
   credentialId: string,
   requestingUserId: string,
-): Promise<boolean> {
+): Promise<{ ok: boolean; error?: string }> {
   const rows = await db
     .select()
     .from(credentials)
@@ -471,16 +472,18 @@ export async function deleteApiCredential(
     .limit(1);
 
   const cred = rows[0];
-  if (!cred) return false;
+  if (!cred) return { ok: false, error: "Credential not found" };
 
-  if (cred.ownerId !== requestingUserId) {
+  // Owner or workspace admin can delete
+  const userIsAdmin = isAdmin(requestingUserId);
+  if (cred.ownerId !== requestingUserId && !userIsAdmin) {
     await audit(cred.id, cred.name, requestingUserId, "delete", "access_denied");
-    return false;
+    return { ok: false, error: "Only the credential owner or a workspace admin can delete credentials" };
   }
 
   await db.delete(credentials).where(eq(credentials.id, credentialId));
   await audit(null, cred.name, requestingUserId, "delete");
-  return true;
+  return { ok: true };
 }
 
 export async function grantApiCredentialAccess(

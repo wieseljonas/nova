@@ -536,10 +536,22 @@ app.post("/api/slack/interactions", async (c) => {
           const credId = selectedValue.replace("api_credential_delete_", "");
           const deletePromise = (async () => {
             try {
-              await deleteApiCredential(credId, userId);
+              const result = await deleteApiCredential(credId, userId);
+              if (!result.ok) {
+                await slackClient.chat.postEphemeral({
+                  channel: userId,
+                  user: userId,
+                  text: `:x: Could not delete credential: ${result.error}`,
+                });
+              }
               await publishHomeTab(slackClient, userId);
             } catch (err) {
               recordError("interactions.api_credential_delete", err, { userId, credId });
+              await slackClient.chat.postEphemeral({
+                channel: userId,
+                user: userId,
+                text: `:x: Failed to delete credential. Please try again.`,
+              }).catch(() => {});
             }
           })();
           waitUntil(deletePromise);
