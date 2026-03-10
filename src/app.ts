@@ -4,6 +4,7 @@ import { waitUntil } from "@vercel/functions";
 import { cronApp } from "./cron/consolidate.js";
 import { heartbeatApp } from "./cron/heartbeat.js";
 import { elevenlabsWebhookApp } from "./webhook/elevenlabs.js";
+import { sandboxProxyApp } from "./api/sandbox-proxy.js";
 import { runPipeline } from "./pipeline/index.js";
 import {
   publishHomeTab,
@@ -74,6 +75,7 @@ app.route("/", heartbeatApp);
 
 // Mount ElevenLabs voice webhook routes
 app.route("/api/webhook/elevenlabs", elevenlabsWebhookApp);
+app.route("/", sandboxProxyApp);
 
 // ── Slack Signature Verification ────────────────────────────────────────────
 

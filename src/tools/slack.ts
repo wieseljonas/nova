@@ -22,6 +22,7 @@ import { createSubagentTools } from "./subagents.js";
 import { createVoiceTools } from "./voice.js";
 import { createResourceTools } from "./resources.js";
 import { createHttpRequestTool } from "./http-request.js";
+import { createSandboxApiTools } from "./sandbox-api.js";
 import type { ScheduleContext } from "../db/schema.js";
 import { formatForSlack } from "../lib/format.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
@@ -2962,6 +2963,7 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
 
     // ── Sandbox Tools ────────────────────────────────────────────────────
     ...createSandboxTools(context),
+    ...createSandboxApiTools(context),
 
     // ── Browser Tools (Browserbase + Playwright) ──────────────────────────
     ...createBrowserTools(context),
