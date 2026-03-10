@@ -16,13 +16,13 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
-    "incremental": true,
     "paths": {
       "@/*": [
         "./src/*"
       ]
     },
-    "baseUrl": "."
+    "baseUrl": ".",
+    "incremental": true
   },
   "include": [
     "src/**/*.ts"

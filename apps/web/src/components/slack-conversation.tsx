@@ -45,6 +45,8 @@ export type SlackConversationProps = {
   maxWidth?: string;
   /** Dark or light theme override. Defaults to CSS var cascade (system). */
   theme?: "dark" | "light";
+  /** Extra CSS class(es) applied to the root div */
+  className?: string;
 };
 
 // ── Slack mrkdwn parser ──────────────────────────────────────────────────────
@@ -498,7 +500,7 @@ function SlackMessageRow({
       style={{
         display: "flex",
         gap: "0",
-        padding: sameAuthor ? "1px 20px 1px 20px" : "6px 20px 2px 20px",
+        padding: sameAuthor ? "1px 8px 1px 8px" : "6px 8px 2px 8px",
         position: "relative",
       }}
       onMouseEnter={(e) => {
@@ -600,6 +602,7 @@ export function SlackConversation({
   messages,
   maxWidth = "680px",
   theme,
+  className,
 }: SlackConversationProps) {
   // Detect dark from next-themes: checks class="dark" and data-theme="dark" on <html>
   const [themeDark, setThemeDark] = React.useState(false);
@@ -624,13 +627,14 @@ export function SlackConversation({
 
   return (
     <div
+      className={className}
       style={{
         maxWidth,
         fontFamily:
           'Slack-Lato,"Lato",ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif',
         background: bgColor,
         border: `1px solid ${borderColor}`,
-        borderRadius: "12px",
+        borderRadius: "4px",
         overflow: "hidden",
         padding: "8px 0",
       }}
