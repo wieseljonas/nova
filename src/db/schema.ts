@@ -555,7 +555,7 @@ export const actionLog = pgTable(
     approvedBy: text("approved_by"),
     approvedAt: timestamptz("approved_at"),
     idempotencyKey: text("idempotency_key"),
-    // HITL resumption fields
+    // HITL resumption fields (SDK-native approval pattern)
     conversationState: jsonb("conversation_state").$type<{
       channelId: string;
       threadTs?: string;
@@ -569,8 +569,9 @@ export const actionLog = pgTable(
       teamId?: string;
       timezone?: string;
       modelId?: string;
-      toolCallId?: string;
-      previousMessages?: any[];
+      // SDK-native approval: full message history for resumption
+      messages: any[];
+      approvalId: string;
     }>(),
     approvalMessageTs: text("approval_message_ts"),
     approvalChannelId: text("approval_channel_id"),
