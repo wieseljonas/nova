@@ -296,6 +296,7 @@ function buildAuthSchemeBlock(authScheme: AuthScheme) {
         { text: { type: "plain_text", text: "Header" }, value: "header" },
         { text: { type: "plain_text", text: "Query" }, value: "query" },
         { text: { type: "plain_text", text: "OAuth Client" }, value: "oauth_client" },
+        { text: { type: "plain_text", text: "Google Service Account" }, value: "google_service_account" },
       ],
       initial_option: (() => {
         const labels: Record<AuthScheme, string> = {
@@ -304,6 +305,7 @@ function buildAuthSchemeBlock(authScheme: AuthScheme) {
           header: "Header",
           query: "Query",
           oauth_client: "OAuth Client",
+          google_service_account: "Google Service Account",
         };
         return { text: { type: "plain_text", text: labels[authScheme] }, value: authScheme };
       })(),
@@ -353,6 +355,45 @@ function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
           {
             type: "mrkdwn",
             text: "Credentials will be automatically exchanged for an access token when retrieved.",
+          },
+        ],
+      },
+    ];
+  }
+
+  if (authScheme === "google_service_account") {
+    return [
+      {
+        type: "input",
+        block_id: "cred_gsa_json_block",
+        label: { type: "plain_text", text: "Service Account JSON Key" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_gsa_json",
+          multiline: true,
+          placeholder: { type: "plain_text", text: "Paste the full JSON key file contents" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "cred_gsa_scopes_block",
+        optional: true,
+        label: { type: "plain_text", text: "Scopes (optional)" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_gsa_scopes",
+          placeholder: {
+            type: "plain_text",
+            text: "e.g. https://www.googleapis.com/auth/bigquery.readonly",
+          },
+        },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Defaults to `cloud-platform` scope. Comma-separate multiple scopes. The JSON key is encrypted at rest and used server-side to mint short-lived OAuth2 tokens via JWT exchange.",
           },
         ],
       },

@@ -41,7 +41,7 @@ type AuditAction =
   | "use"
   | "expired_access_attempt";
 
-export type AuthScheme = "bearer" | "basic" | "header" | "query" | "oauth_client";
+export type AuthScheme = "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account";
 
 async function audit(
   credentialId: string | null,
@@ -162,6 +162,20 @@ export async function storeApiCredential(
       if (!(e instanceof SyntaxError)) throw e;
       throw new Error(`${authScheme} value must be valid JSON with key and secret keys`);
     }
+  } else if (authScheme === "google_service_account") {
+    try {
+      const parsed = JSON.parse(plaintext);
+      if (!parsed.private_key || !parsed.client_email) {
+        throw new Error(
+          "google_service_account value must contain private_key and client_email",
+        );
+      }
+    } catch (e: any) {
+      if (e.message.includes("private_key") || e.message.includes("client_email")) throw e;
+      throw new Error(
+        "google_service_account value must be valid Google service account JSON key",
+      );
+    }
   }
 
   const encrypted = encryptCredential(plaintext);
@@ -277,7 +291,44 @@ export async function getApiCredentialWithType(
     };
   }
 
+  if (cred.authScheme === "google_service_account") {
+    const token = await exchangeGoogleServiceAccountToken(decrypted);
+    return {
+      value: token,
+      authScheme: cred.authScheme as AuthScheme,
+    };
+  }
+
   return { value: decrypted, authScheme: cred.authScheme as AuthScheme };
+}
+
+async function exchangeGoogleServiceAccountToken(
+  jsonKeyStr: string,
+): Promise<string> {
+  const { GoogleAuth } = await import("google-auth-library");
+  let keyData: { client_email: string; private_key: string; scopes?: string };
+  try {
+    keyData = JSON.parse(jsonKeyStr);
+  } catch {
+    throw new Error("google_service_account credential has invalid JSON value");
+  }
+
+  const auth = new GoogleAuth({
+    credentials: {
+      client_email: keyData.client_email,
+      private_key: keyData.private_key,
+    },
+    scopes: keyData.scopes
+      ? keyData.scopes.split(",").map((s: string) => s.trim())
+      : ["https://www.googleapis.com/auth/cloud-platform"],
+  });
+
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  if (!tokenResponse.token) {
+    throw new Error("google_service_account: failed to obtain access token");
+  }
+  return tokenResponse.token;
 }
 
 async function exchangeOAuthToken(

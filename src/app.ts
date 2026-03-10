@@ -448,7 +448,8 @@ app.post("/api/slack/interactions", async (c) => {
           | "basic"
           | "header"
           | "query"
-          | "oauth_client";
+          | "oauth_client"
+          | "google_service_account";
         // Preserve the name field value if already filled
         const currentName = payload.view.state?.values?.cred_name_block?.cred_name?.value || "";
         const isAdd = payload.view.callback_id === "api_credential_add_submit";
@@ -509,7 +510,7 @@ app.post("/api/slack/interactions", async (c) => {
             const cred = creds.find((c) => c.id === credId);
             const credName = cred?.name ?? "credential";
             const credAuthScheme = (cred?.authScheme ??
-              "bearer") as "bearer" | "basic" | "header" | "query" | "oauth_client";
+              "bearer") as "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account";
             const updatePromise = openUpdateCredentialModal(
               slackClient,
               payload.trigger_id,
@@ -701,7 +702,7 @@ app.post("/api/slack/interactions", async (c) => {
 /** Extract credential value from modal state based on auth scheme */
 function extractCredentialValue(
   values: Record<string, any> | undefined,
-  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client"
+  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account"
 ): string | undefined {
   if (authScheme === "oauth_client") {
     const clientId = values?.cred_client_id_block?.cred_client_id?.value;
@@ -722,6 +723,19 @@ function extractCredentialValue(
     if (key && secret) {
       return JSON.stringify({ key, secret });
     }
+  } else if (authScheme === "google_service_account") {
+    const jsonKey = values?.cred_gsa_json_block?.cred_gsa_json?.value;
+    const scopes = values?.cred_gsa_scopes_block?.cred_gsa_scopes?.value;
+    if (jsonKey) {
+      // Embed scopes into the JSON key so they're stored together
+      try {
+        const parsed = JSON.parse(jsonKey);
+        if (scopes) parsed.scopes = scopes;
+        return JSON.stringify(parsed);
+      } catch {
+        return undefined; // Invalid JSON -- validation will catch this
+      }
+    }
   } else {
     return values?.cred_value_block?.cred_value?.value;
   }
@@ -737,7 +751,8 @@ function extractCredentialValue(
         | "basic"
         | "header"
         | "query"
-        | "oauth_client";
+        | "oauth_client"
+        | "google_service_account";
 
       const value = extractCredentialValue(payload.view?.state?.values, authScheme);
 
@@ -758,6 +773,7 @@ function extractCredentialValue(
         console.warn(`[credential-add] value extraction failed for scheme=${authScheme}, user=${userId}, name=${name}`);
         const errorBlock = authScheme === "basic" ? "cred_username_block"
           : authScheme === "oauth_client" ? "cred_client_id_block"
+          : authScheme === "google_service_account" ? "cred_gsa_json_block"
           : authScheme === "header" || authScheme === "query" ? "cred_secret_block"
           : "cred_value_block";
         return c.json({
@@ -776,7 +792,8 @@ function extractCredentialValue(
         | "basic"
         | "header"
         | "query"
-        | "oauth_client";
+        | "oauth_client"
+        | "google_service_account";
 
       const value = extractCredentialValue(payload.view?.state?.values, authScheme);
 
