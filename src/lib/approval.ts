@@ -149,7 +149,7 @@ export async function requestApproval(args: {
   policy: ApprovalPolicy | null;
   context: ExecutionContext;
   slackClient?: InstanceType<typeof import("@slack/web-api").WebClient> | null;
-}): Promise<void> {
+}): Promise<{ ts: string; channelId: string } | null> {
   const { actionLogId, toolName, params, riskTier, policy, context, slackClient: injectedSlackClient } = args;
   const slackClient = injectedSlackClient ?? new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -243,7 +243,7 @@ export async function requestApproval(args: {
     targetChannel = dm.channel?.id ?? logEntry.triggeredBy;
   }
 
-  await slackClient.chat.postMessage({
+  const result = await slackClient.chat.postMessage({
     channel: targetChannel,
     ...(context.threadTs ? { thread_ts: context.threadTs } : {}),
     text: `Approval required for ${toolName} (${riskTier})`,
@@ -271,7 +271,10 @@ export async function requestApproval(args: {
     toolName,
     riskTier,
     channel: targetChannel,
+    messageTs: result.ts,
   });
+
+  return result.ts ? { ts: result.ts, channelId: targetChannel } : null;
 }
 
 // ── Handle Approval Reaction ────────────────────────────────────────────────

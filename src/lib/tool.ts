@@ -15,9 +15,24 @@ export interface ExecutionContext {
   jobId?: string;
   channelId?: string;
   threadTs?: string;
+  // HITL resumption context - populated by pipeline when approval might be needed
+  conversationState?: {
+    userMessage: string;
+    stablePrefix: string;
+    conversationContext: string;
+    dynamicContext?: string;
+    files?: any[];
+    teamId?: string;
+    timezone?: string;
+    modelId?: string;
+    channelType?: string;
+  };
 }
 
 export const executionContext = new AsyncLocalStorage<ExecutionContext>();
+
+// HITL: Separate storage for conversation state (populated by pipeline)
+export const conversationStateStorage = new AsyncLocalStorage<ExecutionContext["conversationState"]>();
 
 // ── PendingApprovalError ─────────────────────────────────────────────────────
 
@@ -103,6 +118,12 @@ export function defineTool<TInput, TOutput>(config: {
       triggeredBy: "unknown",
       triggerType: "autonomous" as const,
     };
+    
+    // HITL: Merge conversation state from separate storage if available
+    const conversationState = conversationStateStorage.getStore();
+    if (conversationState && !ctx.conversationState) {
+      (ctx as any).conversationState = conversationState;
+    }
 
     let riskTier: "read" | "write" | "destructive" = "write";
     let policy: ApprovalPolicy | null = null;
@@ -138,10 +159,25 @@ export function defineTool<TInput, TOutput>(config: {
           credentialName: (input as any)?.credential_name ?? null,
           riskTier,
           status: "pending_approval",
+          // Store conversation state for resumption (if available)
+          conversationState: ctx.conversationState ? {
+            channelId: ctx.channelId || "",
+            threadTs: ctx.threadTs,
+            userId: ctx.triggeredBy,
+            channelType: ctx.conversationState.channelType || "dm",
+            userMessage: ctx.conversationState.userMessage,
+            stablePrefix: ctx.conversationState.stablePrefix,
+            conversationContext: ctx.conversationState.conversationContext,
+            dynamicContext: ctx.conversationState.dynamicContext,
+            files: ctx.conversationState.files,
+            teamId: ctx.conversationState.teamId,
+            timezone: ctx.conversationState.timezone,
+            modelId: ctx.conversationState.modelId,
+          } : null,
         })
         .returning({ id: actionLog.id });
 
-      await requestApproval({
+      const approvalMessageInfo = await requestApproval({
         actionLogId: logEntry.id,
         toolName,
         params: input,
@@ -149,6 +185,17 @@ export function defineTool<TInput, TOutput>(config: {
         policy: policy,
         context: ctx,
       });
+
+      // Store approval message location for later reference
+      if (approvalMessageInfo) {
+        await db
+          .update(actionLog)
+          .set({
+            approvalMessageTs: approvalMessageInfo.ts,
+            approvalChannelId: approvalMessageInfo.channelId,
+          })
+          .where(eq(actionLog.id, logEntry.id));
+      }
 
       throw new PendingApprovalError(logEntry.id);
     }

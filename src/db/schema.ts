@@ -555,6 +555,25 @@ export const actionLog = pgTable(
     approvedBy: text("approved_by"),
     approvedAt: timestamptz("approved_at"),
     idempotencyKey: text("idempotency_key"),
+    // HITL resumption fields
+    conversationState: jsonb("conversation_state").$type<{
+      channelId: string;
+      threadTs?: string;
+      userId: string;
+      channelType: string;
+      userMessage: string;
+      stablePrefix: string;
+      conversationContext: string;
+      dynamicContext?: string;
+      files?: any[];
+      teamId?: string;
+      timezone?: string;
+      modelId?: string;
+      toolCallId?: string;
+      previousMessages?: any[];
+    }>(),
+    approvalMessageTs: text("approval_message_ts"),
+    approvalChannelId: text("approval_channel_id"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (table) => [
