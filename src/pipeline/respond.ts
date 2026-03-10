@@ -535,7 +535,27 @@ export async function generateResponse(
   }
 
   try {
-    const result = await agent.stream(streamCallOptions as any);
+    // ── HITL: Wrap agent stream in conversation state storage ───────────
+    // If a destructive tool is called, the governance layer needs conversation
+    // state to resume execution after approval.
+    const { conversationStateStorage } = await import("../lib/tool.js");
+    const conversationState = {
+      userMessage: options.userMessage,
+      stablePrefix: options.stablePrefix,
+      conversationContext: options.conversationContext,
+      dynamicContext: options.dynamicContext,
+      files: options.files,
+      teamId: options.teamId,
+      timezone: options.context?.timezone,
+      modelId,
+      channelType: options.channelType,
+      // P1-3 fix: Capture previousMessages for HITL resumption
+      previousMessages: streamCallOptions.messages || [],
+    };
+
+    const result = await conversationStateStorage.run(conversationState, async () => {
+      return await agent.stream(streamCallOptions as any);
+    });
 
     for await (const chunk of result.fullStream) {
       resetTimer();
