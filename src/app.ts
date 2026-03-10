@@ -765,6 +765,12 @@ function extractCredentialValue(
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_add", err, { userId, name });
+            try {
+              await slackClient.chat.postMessage({
+                channel: userId,
+                text: `Failed to save credential "${name}": ${err instanceof Error ? err.message : String(err)}`,
+              });
+            } catch { /* best effort */ }
           }
         })();
         waitUntil(addPromise);
