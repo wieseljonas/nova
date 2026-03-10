@@ -343,14 +343,29 @@ export async function handleApprovalReaction(args: {
   const isApproved = reaction === "white_check_mark";
   const newStatus = isApproved ? "approved" : "rejected";
 
-  await db
+  // Atomic compare-and-set to prevent race condition (P0-1 fix)
+  const updated = await db
     .update(actionLog)
     .set({
       status: newStatus,
       approvedBy: reactorUserId,
       approvedAt: new Date(),
     })
-    .where(eq(actionLog.id, actionLogId));
+    .where(
+      and(
+        eq(actionLog.id, actionLogId),
+        eq(actionLog.status, "pending_approval")
+      )
+    )
+    .returning({ id: actionLog.id });
+
+  if (updated.length === 0) {
+    logger.info("handleApprovalReaction: action already processed by another approver", {
+      actionLogId,
+      reactorUserId,
+    });
+    return;
+  }
 
   if (entry.jobId) {
     if (isApproved) {

@@ -33,6 +33,17 @@ export async function resumeConversationAfterApproval(args: {
   const { actionLogId, approvedBy, slackClient } = args;
 
   try {
+    // P1-2 fix: Verify approver is authorized (admin check happens in handleApprovalReaction,
+    // but we double-check here for defense in depth)
+    const { isAdmin } = await import("../slack/home.js");
+    if (!isAdmin(approvedBy)) {
+      logger.warn("resumeConversationAfterApproval: unauthorized approver", {
+        actionLogId,
+        approvedBy,
+      });
+      return { ok: false, error: "Unauthorized: only admins can approve actions" };
+    }
+
     // 1. Retrieve the action log entry with conversation state
     const rows = await db
       .select()
@@ -109,8 +120,14 @@ export async function resumeConversationAfterApproval(args: {
         throw new Error(`Tool ${entry.toolName} not found in agent tools`);
       }
 
+      // P0-2 fix: Set _approvedActionId to bypass governance on re-execution
+      const executionCtx = {
+        ...ctx,
+        _approvedActionId: actionLogId,
+      };
+
       // Execute in the proper context so the tool wrapper can log it
-      await executionContext.run(ctx, async () => {
+      await executionContext.run(executionCtx, async () => {
         try {
           // @ts-ignore - We're calling the tool execute function directly
           toolResult = await tool.execute(entry.params);
@@ -142,6 +159,17 @@ export async function resumeConversationAfterApproval(args: {
         actionLogId,
         toolName: entry.toolName,
         error: err.message,
+        stack: err.stack,
+      });
+
+      // P1-4 fix: Log detailed error server-side
+      logError({
+        errorName: "ApprovedToolExecutionError",
+        errorMessage: err.message,
+        errorCode: "hitl_approved_tool_failed",
+        userId: state.userId,
+        channelId: state.channelId,
+        context: { actionLogId, toolName: entry.toolName, stack: err.stack },
       });
 
       // Update action log with failure
@@ -153,14 +181,14 @@ export async function resumeConversationAfterApproval(args: {
         })
         .where(eq(actionLog.id, actionLogId));
 
-      // Notify user of failure
+      // P1-4 fix: Send generic error message to user, not raw error
       await safePostMessage(slackClient, {
         channel: state.channelId,
         thread_ts: state.threadTs,
-        text: `The approved tool \`${entry.toolName}\` failed to execute: ${err.message}`,
+        text: `The approved action failed to execute. The error has been logged for review.`,
       });
 
-      return { ok: false, error: err.message };
+      return { ok: false, error: "Tool execution failed" };
     }
 
     // 3. Resume the LLM conversation with the tool result
@@ -238,41 +266,46 @@ Please continue the conversation acknowledging the tool result.`;
       logger.error("Failed to resume conversation after tool execution", {
         actionLogId,
         error: err.message,
+        stack: err.stack,
       });
 
+      // P1-4 fix: Log detailed error with stack trace
       logError({
         errorName: "ConversationResumptionError",
         errorMessage: err.message,
         errorCode: "hitl_resumption_failed",
         userId: state.userId,
         channelId: state.channelId,
-        context: { actionLogId, toolName: entry.toolName },
+        context: { actionLogId, toolName: entry.toolName, stack: err.stack },
       });
 
-      // Still notify user that the tool executed, even if continuation failed
+      // P1-4 fix: Generic message to user, detailed result but no raw error
       await safePostMessage(slackClient, {
         channel: state.channelId,
         thread_ts: state.threadTs,
-        text: `Tool \`${entry.toolName}\` executed successfully after approval, but I had trouble generating a response. The result was:\n\`\`\`\n${JSON.stringify(toolResult, null, 2).slice(0, 1000)}\n\`\`\``,
+        text: `The approved action completed, but I had trouble generating a follow-up response. You can check the action logs for details.`,
       });
 
-      return { ok: false, error: err.message };
+      return { ok: false, error: "Conversation resumption failed" };
     }
 
   } catch (error: any) {
     logger.error("Resumption handler error", {
       actionLogId,
       error: error.message,
+      stack: error.stack,
     });
 
+    // P1-4 fix: Log detailed error with stack
     logError({
       errorName: "ResumptionHandlerError",
       errorMessage: error.message,
       errorCode: "hitl_resumption_handler_error",
-      context: { actionLogId },
+      context: { actionLogId, stack: error.stack },
     });
 
-    return { ok: false, error: error.message };
+    // P1-4 fix: Generic error message to caller
+    return { ok: false, error: "Failed to resume conversation after approval" };
   }
 }
 
@@ -333,8 +366,18 @@ export async function handleToolRejection(args: {
     logger.error("Rejection handler error", {
       actionLogId,
       error: error.message,
+      stack: error.stack,
     });
 
-    return { ok: false, error: error.message };
+    // P1-4 fix: Log detailed error
+    logError({
+      errorName: "RejectionHandlerError",
+      errorMessage: error.message,
+      errorCode: "hitl_rejection_handler_error",
+      context: { actionLogId, stack: error.stack },
+    });
+
+    // P1-4 fix: Generic error message
+    return { ok: false, error: "Failed to handle tool rejection" };
   }
 }

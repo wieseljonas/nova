@@ -549,6 +549,8 @@ export async function generateResponse(
       timezone: options.context?.timezone,
       modelId,
       channelType: options.channelType,
+      // P1-3 fix: Capture previousMessages for HITL resumption
+      previousMessages: streamCallOptions.messages || [],
     };
 
     const result = await conversationStateStorage.run(conversationState, async () => {

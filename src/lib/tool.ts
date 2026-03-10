@@ -15,6 +15,10 @@ export interface ExecutionContext {
   jobId?: string;
   channelId?: string;
   threadTs?: string;
+  // HITL resumption: if set, this tool execution is pre-approved and should bypass governance (P0-2 fix)
+  _approvedActionId?: string;
+  // P1-3: toolCallId from AI SDK stream (if available)
+  toolCallId?: string;
   // HITL resumption context - populated by pipeline when approval might be needed
   conversationState?: {
     userMessage: string;
@@ -26,6 +30,8 @@ export interface ExecutionContext {
     timezone?: string;
     modelId?: string;
     channelType?: string;
+    previousMessages?: any[];
+    toolCallId?: string;
   };
 }
 
@@ -125,6 +131,15 @@ export function defineTool<TInput, TOutput>(config: {
       (ctx as any).conversationState = conversationState;
     }
 
+    // P0-2 fix: If this execution is pre-approved, bypass governance entirely
+    if (ctx._approvedActionId) {
+      logger.info("Governance: bypassing approval check for pre-approved action", {
+        toolName,
+        approvedActionId: ctx._approvedActionId,
+      });
+      return await originalExecute(input);
+    }
+
     let riskTier: "read" | "write" | "destructive" = "write";
     let policy: ApprovalPolicy | null = null;
 
@@ -173,6 +188,9 @@ export function defineTool<TInput, TOutput>(config: {
             teamId: ctx.conversationState.teamId,
             timezone: ctx.conversationState.timezone,
             modelId: ctx.conversationState.modelId,
+            // P1-3 fix: Populate previousMessages and toolCallId
+            previousMessages: ctx.conversationState.previousMessages,
+            toolCallId: ctx.toolCallId,
           } : null,
         })
         .returning({ id: actionLog.id });
