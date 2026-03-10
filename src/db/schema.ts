@@ -561,7 +561,9 @@ export const actionLog = pgTable(
       threadTs?: string;
       userId: string;
       channelType: string;
-      userMessage: string;
+      messages: any[]; // Full AI SDK messages for replay on resumption
+      toolCallId: string; // Tool call ID needing approval
+      approvalId?: string; // SDK approval ID
       stablePrefix: string;
       conversationContext: string;
       dynamicContext?: string;
@@ -569,8 +571,6 @@ export const actionLog = pgTable(
       teamId?: string;
       timezone?: string;
       modelId?: string;
-      toolCallId?: string;
-      previousMessages?: any[];
     }>(),
     approvalMessageTs: text("approval_message_ts"),
     approvalChannelId: text("approval_channel_id"),

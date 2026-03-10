@@ -6,7 +6,7 @@ import { logError } from "../lib/error-logger.js";
 import { formatForSlack, prettifyAndWrapTable } from "../lib/format.js";
 import { TABLE_BLOCK_KEY } from "../tools/table.js";
 import { safePostMessage, isChannelTypeNotSupported, isInvalidBlocks, isMsgTooLong } from "../lib/slack-messaging.js";
-import { getSlackMeta } from "../lib/tool.js";
+import { getSlackMeta, executionContext } from "../lib/tool.js";
 import { createInteractiveAgent } from "../lib/agents.js";
 import { getMainModel, buildCachedSystemMessages } from "../lib/ai.js";
 
@@ -535,27 +535,7 @@ export async function generateResponse(
   }
 
   try {
-    // ── HITL: Wrap agent stream in conversation state storage ───────────
-    // If a destructive tool is called, the governance layer needs conversation
-    // state to resume execution after approval.
-    const { conversationStateStorage } = await import("../lib/tool.js");
-    const conversationState = {
-      userMessage: options.userMessage,
-      stablePrefix: options.stablePrefix,
-      conversationContext: options.conversationContext,
-      dynamicContext: options.dynamicContext,
-      files: options.files,
-      teamId: options.teamId,
-      timezone: options.context?.timezone,
-      modelId,
-      channelType: options.channelType,
-      // P1-3 fix: Capture previousMessages for HITL resumption
-      previousMessages: streamCallOptions.messages || [],
-    };
-
-    const result = await conversationStateStorage.run(conversationState, async () => {
-      return await agent.stream(streamCallOptions as any);
-    });
+    const result = await agent.stream(streamCallOptions as any);
 
     for await (const chunk of result.fullStream) {
       resetTimer();
@@ -787,6 +767,128 @@ export async function generateResponse(
               fallbackStartIdx = accumulatedText.length;
             }
           }
+          break;
+        }
+
+        case "tool-approval-request": {
+          // SDK-native HITL: a tool needs human approval before execution
+          const approvalChunk = chunk as any;
+          const approvalToolCall = approvalChunk.toolCall ?? {};
+          const approvalToolName = approvalToolCall.toolName || "unknown";
+          const approvalToolCallId = approvalToolCall.toolCallId || approvalChunk.toolCallId || "";
+          const approvalId = approvalChunk.approvalId || "";
+          const approvalInput = approvalToolCall.input ?? {};
+
+          logger.info("HITL: tool-approval-request received", {
+            toolName: approvalToolName,
+            toolCallId: approvalToolCallId,
+            approvalId,
+          });
+
+          try {
+            // Save conversation state for resumption after approval
+            const { db } = await import("../db/client.js");
+            const { actionLog } = await import("../db/schema.js");
+            const { requestApproval, effectiveRiskTier, lookupPolicy } = await import("../lib/approval.js");
+
+            const ctx = executionContext.getStore() ?? {
+              triggeredBy: "unknown",
+              triggerType: "autonomous" as const,
+            };
+
+            // Determine risk tier for the approval message
+            const httpInput = approvalInput as Record<string, unknown>;
+            const policy = await lookupPolicy({
+              toolName: approvalToolName,
+              url: approvalToolName === "http_request" ? (httpInput.url as string) : undefined,
+              method: approvalToolName === "http_request" ? (httpInput.method as string) : undefined,
+              credentialName: httpInput.credential_name as string | undefined,
+            }).catch(() => null);
+            const riskTier = effectiveRiskTier(
+              policy,
+              approvalToolName === "http_request" ? (httpInput.method as string) : undefined,
+            );
+
+            // Get the messages from the stream response for replay
+            const responseData = await result.response;
+            const responseMessages = responseData?.messages ?? [];
+
+            // Insert action_log entry
+            const { eq } = await import("drizzle-orm");
+            const [logEntry] = await db
+              .insert(actionLog)
+              .values({
+                toolName: approvalToolName,
+                params: approvalInput as any,
+                triggerType: ctx.triggerType,
+                triggeredBy: ctx.triggeredBy,
+                jobId: ctx.jobId ?? null,
+                credentialName: (approvalInput as any)?.credential_name ?? null,
+                riskTier,
+                status: "pending_approval",
+                conversationState: {
+                  channelId,
+                  threadTs,
+                  userId: ctx.triggeredBy,
+                  channelType: options.channelType || "channel",
+                  messages: [
+                    ...(streamCallOptions.messages || []),
+                    ...responseMessages,
+                  ],
+                  toolCallId: approvalToolCallId,
+                  approvalId,
+                  stablePrefix: options.stablePrefix,
+                  conversationContext: options.conversationContext,
+                  dynamicContext: options.dynamicContext,
+                  files: options.files,
+                  teamId: options.teamId,
+                  timezone: options.context?.timezone,
+                  modelId,
+                },
+              })
+              .returning({ id: actionLog.id });
+
+            // Post approval buttons
+            const approvalMessageInfo = await requestApproval({
+              actionLogId: logEntry.id,
+              toolName: approvalToolName,
+              params: approvalInput,
+              riskTier,
+              policy,
+              context: {
+                channelId,
+                threadTs,
+                jobId: ctx.jobId,
+                triggerType: ctx.triggerType,
+                userId: ctx.triggeredBy,
+              },
+              slackClient,
+            });
+
+            // Store approval message location
+            if (approvalMessageInfo) {
+              await db
+                .update(actionLog)
+                .set({
+                  approvalMessageTs: approvalMessageInfo.ts,
+                  approvalChannelId: approvalMessageInfo.channelId,
+                })
+                .where(eq(actionLog.id, logEntry.id));
+            }
+
+            logger.info("HITL: approval request saved and posted", {
+              actionLogId: logEntry.id,
+              toolName: approvalToolName,
+              approvalId,
+            });
+          } catch (approvalErr: any) {
+            logger.error("HITL: failed to save/post approval request", {
+              toolName: approvalToolName,
+              error: approvalErr?.message,
+              stack: approvalErr?.stack,
+            });
+          }
+
           break;
         }
       }
