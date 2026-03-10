@@ -535,27 +535,7 @@ export async function generateResponse(
   }
 
   try {
-    // ── HITL: Wrap agent stream in conversation state storage ───────────
-    // If a destructive tool is called, the governance layer needs conversation
-    // state to resume execution after approval.
-    const { conversationStateStorage } = await import("../lib/tool.js");
-    const conversationState = {
-      userMessage: options.userMessage,
-      stablePrefix: options.stablePrefix,
-      conversationContext: options.conversationContext,
-      dynamicContext: options.dynamicContext,
-      files: options.files,
-      teamId: options.teamId,
-      timezone: options.context?.timezone,
-      modelId,
-      channelType: options.channelType,
-      // P1-3 fix: Capture previousMessages for HITL resumption
-      previousMessages: streamCallOptions.messages || [],
-    };
-
-    const result = await conversationStateStorage.run(conversationState, async () => {
-      return await agent.stream(streamCallOptions as any);
-    });
+    const result = await agent.stream(streamCallOptions as any);
 
     for await (const chunk of result.fullStream) {
       resetTimer();
@@ -681,6 +661,87 @@ export async function generateResponse(
               }
               await tryStreamAppend({ markdown_text: " " });
             }, 20_000);
+          }
+          break;
+        }
+
+        case "tool-approval-request": {
+          // SDK-native approval: A tool needs approval before execution
+          const approvalToolCallId = (chunk as any).toolCallId;
+          const approvalToolName = (chunk as any).toolName;
+          const approvalArgs = (chunk as any).args;
+
+          logger.info("SDK-native approval request detected in stream", {
+            toolCallId: approvalToolCallId,
+            toolName: approvalToolName,
+            channelId,
+          });
+
+          // Save conversation state for resumption
+          const { db } = await import("../db/client.js");
+          const { actionLog } = await import("../db/schema.js");
+          
+          // Build message history up to this point
+          const currentMessages = streamCallOptions.messages || [
+            { role: "user" as const, content: options.userMessage }
+          ];
+
+          const [logEntry] = await db
+            .insert(actionLog)
+            .values({
+              toolName: approvalToolName,
+              params: approvalArgs as any,
+              triggerType: "user_message",
+              triggeredBy: options.context?.userId || "unknown",
+              credentialName: (approvalArgs as any)?.credential_name ?? null,
+              riskTier: "write",
+              status: "pending_approval",
+              conversationState: {
+                channelId,
+                threadTs,
+                userId: options.context?.userId || "unknown",
+                channelType: options.channelType || "dm",
+                userMessage: options.userMessage,
+                stablePrefix: options.stablePrefix,
+                conversationContext: options.conversationContext,
+                dynamicContext: options.dynamicContext,
+                files: options.files,
+                teamId: options.teamId,
+                timezone: options.context?.timezone,
+                modelId,
+                messages: currentMessages,
+                approvalId: approvalToolCallId,
+              },
+            })
+            .returning({ id: actionLog.id });
+
+          // Post approval buttons to Slack
+          const { requestApproval } = await import("../lib/approval.js");
+          const { eq } = await import("drizzle-orm");
+          const approvalMessageInfo = await requestApproval({
+            actionLogId: logEntry.id,
+            toolName: approvalToolName,
+            params: approvalArgs,
+            riskTier: "write",
+            policy: null,
+            context: {
+              userId: options.context?.userId,
+              channelId,
+              threadTs,
+              triggerType: "user_message",
+            },
+            slackClient,
+          });
+
+          // Store approval message location
+          if (approvalMessageInfo) {
+            await db
+              .update(actionLog)
+              .set({
+                approvalMessageTs: approvalMessageInfo.ts,
+                approvalChannelId: approvalMessageInfo.channelId,
+              })
+              .where(eq(actionLog.id, logEntry.id));
           }
           break;
         }
