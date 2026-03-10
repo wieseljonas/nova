@@ -431,6 +431,7 @@ app.post("/api/slack/interactions", async (c) => {
 
       // ── User API Credential actions ──────────────────────────────────
       if (action.action_id === "api_credential_add" && payload.trigger_id) {
+        if (!isAdmin(userId)) return;
         const addPromise = openAddCredentialModal(
           slackClient,
           payload.trigger_id,
@@ -728,6 +729,7 @@ function extractCredentialValue(
 }
 
     if (callbackId === "api_credential_add_submit" && userId) {
+      if (!isAdmin(userId)) return;
       const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
       const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
       const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
