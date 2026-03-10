@@ -121,7 +121,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                   };
                 }
                 const encoded = Buffer.from(
-                  `${basicParsed.username}:${basicParsed.password}`
+                  `${basicParsed.username}:${basicParsed.password ?? ""}`
                 ).toString("base64");
                 headers["Authorization"] = `Basic ${encoded}`;
                 break;

@@ -1,6 +1,6 @@
 {
   "installCommand": "npm install",
-  "buildCommand": "tsc & tsx src/db/migrate.ts & wait",
+  "buildCommand": "tsc & P1=$!; tsx src/db/migrate.ts & P2=$!; wait $P1 && wait $P2",
   "framework": null,
   "regions": [
     "fra1"
