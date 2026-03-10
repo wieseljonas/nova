@@ -208,7 +208,9 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           const response = await fetch(requestUrl, {
             method: input.method,
             headers,
-            body: input.body ? JSON.stringify(input.body) : undefined,
+            body: input.body
+              ? (typeof input.body === "string" ? input.body : JSON.stringify(input.body))
+              : undefined,
             redirect: "manual",
             signal: AbortSignal.timeout(input.timeout_ms),
           });
