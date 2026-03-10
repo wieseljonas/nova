@@ -712,8 +712,8 @@ function extractCredentialValue(
     }
   } else if (authScheme === "basic") {
     const username = values?.cred_username_block?.cred_username?.value;
-    const password = values?.cred_password_block?.cred_password?.value;
-    if (username && password) {
+    const password = values?.cred_password_block?.cred_password?.value ?? "";
+    if (username) {
       return JSON.stringify({ username, password });
     }
   } else if (authScheme === "header" || authScheme === "query") {
@@ -756,7 +756,7 @@ function extractCredentialValue(
       } else if (name && !value) {
         // Value extraction failed -- return validation error to the modal
         console.warn(`[credential-add] value extraction failed for scheme=${authScheme}, user=${userId}, name=${name}`);
-        const errorBlock = authScheme === "basic" ? "cred_password_block"
+        const errorBlock = authScheme === "basic" ? "cred_username_block"
           : authScheme === "oauth_client" ? "cred_client_id_block"
           : authScheme === "header" || authScheme === "query" ? "cred_secret_block"
           : "cred_value_block";

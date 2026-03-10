@@ -145,8 +145,8 @@ export async function storeApiCredential(
   } else if (authScheme === "basic") {
     try {
       const parsed = JSON.parse(plaintext);
-      if (parsed.username == null || !parsed.password) {
-        throw new Error("basic value must contain a password (username is optional)");
+      if (!parsed.username) {
+        throw new Error("basic value must contain a username (password is optional)");
       }
     } catch (e: any) {
       if (e.message.includes("password")) throw e;

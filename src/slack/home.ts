@@ -402,12 +402,12 @@ function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
       {
         type: "input",
         block_id: "cred_password_block",
-        label: { type: "plain_text", text: "Password" },
+        optional: true,
+        label: { type: "plain_text", text: "Password (optional)" },
         element: {
           type: "plain_text_input",
           action_id: "cred_password",
-          // Note: Slack Block Kit does not support password masking on plain_text_input
-          placeholder: { type: "plain_text", text: "Paste password or API key" },
+          placeholder: { type: "plain_text", text: "Leave empty if API key is the username" },
         },
       },
     ];
