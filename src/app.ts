@@ -536,23 +536,10 @@ app.post("/api/slack/interactions", async (c) => {
           const credId = selectedValue.replace("api_credential_delete_", "");
           const deletePromise = (async () => {
             try {
-              const result = await deleteApiCredential(credId, userId);
-              if (!result.ok) {
-                await slackClient.chat.postEphemeral({
-                  channel: userId,
-                  user: userId,
-                  text: `:x: Could not delete credential: ${result.error}`,
-                });
-              }
+              await deleteApiCredential(credId, userId);
               await publishHomeTab(slackClient, userId);
             } catch (err) {
               recordError("interactions.api_credential_delete", err, { userId, credId });
-              const errMsg = err instanceof Error ? err.message : String(err);
-              await slackClient.chat.postEphemeral({
-                channel: userId,
-                user: userId,
-                text: `:x: Failed to delete credential: ${errMsg}`,
-              }).catch(() => {});
             }
           })();
           waitUntil(deletePromise);
@@ -723,9 +710,9 @@ function extractCredentialValue(
       return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
     }
   } else if (authScheme === "basic") {
-    const username = values?.cred_username_block?.cred_username?.value ?? "";
+    const username = values?.cred_username_block?.cred_username?.value;
     const password = values?.cred_password_block?.cred_password?.value;
-    if (password) {
+    if (username && password) {
       return JSON.stringify({ username, password });
     }
   } else if (authScheme === "header" || authScheme === "query") {
