@@ -156,6 +156,8 @@ export interface LLMResponse {
   };
   /** Tool calls executed during this response */
   toolCalls: ToolCallRecord[];
+  /** Model ID used for this response */
+  modelId?: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -957,6 +959,7 @@ export async function generateResponse(
       alreadyPosted: true,
       usage: { inputTokens, outputTokens, totalTokens },
       toolCalls: toolCallRecords,
+      modelId,
     };
   } catch (error: any) {
     clearTimeout(inactivityTimer);
@@ -1038,6 +1041,7 @@ export async function generateResponse(
             totalTokens: retryInputTokens + retryOutputTokens,
           },
           toolCalls: toolCallRecords,
+          modelId,
         };
       } catch (retryError: any) {
         clearTimeout(retryInactivityTimer);
@@ -1093,6 +1097,7 @@ export async function generateResponse(
             alreadyPosted: true,
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
             toolCalls: toolCallRecords,
+            modelId,
           };
         }
         logger.warn("LLM response lost — channel does not support posting", {

@@ -393,6 +393,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       client,
       threadMessageCount: conversation.thread?.length ?? 0,
       tokenUsage: response.usage,
+      modelId: response.modelId,
       ...(() => {
         const all = (conversation.thread ?? conversation.recentMessages)
           .map(m => ({ displayName: m.displayName, text: m.text }));
@@ -548,8 +549,9 @@ async function runBackgroundTasks(params: {
   recentThreadMessages: Array<{ displayName: string; text: string }>;
   threadMessagesElided: boolean;
   tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  modelId?: string;
 }): Promise<void> {
-  const { context, event, response, toolCalls, displayName, client, threadMessageCount, recentThreadMessages, threadMessagesElided, tokenUsage } = params;
+  const { context, event, response, toolCalls, displayName, client, threadMessageCount, recentThreadMessages, threadMessagesElided, tokenUsage, modelId } = params;
 
   try {
     // Store the user's message
@@ -575,6 +577,7 @@ async function runBackgroundTasks(params: {
       role: "assistant",
       content: response,
       tokenUsage,
+      model: modelId,
     });
 
     // Store tool call I/O as durable messages

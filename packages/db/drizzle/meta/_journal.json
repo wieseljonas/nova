@@ -253,6 +253,13 @@
       "when": 1773484800000,
       "tag": "0035_add_message_token_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1773571200000,
+      "tag": "0036_add_message_model",
+      "breakpoints": true
     }
   ]
 }
