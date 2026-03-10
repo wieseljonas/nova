@@ -105,7 +105,8 @@ export function createHttpRequestTool(context?: ScheduleContext) {
 
             switch (credResult.authScheme) {
               case "bearer":
-              case "oauth_client": {
+              case "oauth_client":
+              case "google_service_account": {
                 headers["Authorization"] = `Bearer ${credResult.value}`;
                 break;
               }
