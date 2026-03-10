@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createSession, getSessionCookieName } from "@/lib/auth";
+import {
+  buildAppRedirectUrl,
+  getSafeReturnTo,
+  OAUTH_RETURN_TO_COOKIE,
+} from "@/lib/auth-redirect";
 import { isAdmin } from "@/lib/permissions";
 
 export async function GET(request: NextRequest) {
@@ -11,6 +16,9 @@ export async function GET(request: NextRequest) {
 
   const cookieStore = await cookies();
   const savedState = cookieStore.get("oauth_state")?.value;
+  const returnTo = getSafeReturnTo(
+    cookieStore.get(OAUTH_RETURN_TO_COOKIE)?.value,
+  );
 
   if (!code || !state || state !== savedState) {
     return NextResponse.redirect(`${appUrl}/unauthorized?reason=invalid_state`);
@@ -60,6 +68,7 @@ export async function GET(request: NextRequest) {
     maxAge: 7 * 24 * 60 * 60,
     path: "/",
   });
+  cookieStore.delete(OAUTH_RETURN_TO_COOKIE);
 
-  return NextResponse.redirect(appUrl);
+  return NextResponse.redirect(buildAppRedirectUrl(appUrl, returnTo));
 }

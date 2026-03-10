@@ -1,10 +1,29 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import { createSession, getSessionCookieName } from "@/lib/auth";
+import {
+  buildAppRedirectUrl,
+  getSafeReturnTo,
+  OAUTH_RETURN_TO_COOKIE,
+} from "@/lib/auth-redirect";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const returnTo = getSafeReturnTo(request.nextUrl.searchParams.get("returnTo"));
+  const cookieStore = await cookies();
+
+  if (returnTo) {
+    cookieStore.set(OAUTH_RETURN_TO_COOKIE, returnTo, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV !== "development",
+      sameSite: "lax",
+      maxAge: 300,
+      path: "/",
+    });
+  } else {
+    cookieStore.delete(OAUTH_RETURN_TO_COOKIE);
+  }
 
   // In local dev, skip Slack OAuth and create a session directly
   if (process.env.NODE_ENV === "development") {
@@ -14,7 +33,6 @@ export async function GET() {
       name: "Dev Admin",
       picture: "",
     });
-    const cookieStore = await cookies();
     cookieStore.set(getSessionCookieName(), jwt, {
       httpOnly: true,
       secure: false,
@@ -22,12 +40,10 @@ export async function GET() {
       maxAge: 7 * 24 * 60 * 60,
       path: "/",
     });
-    return NextResponse.redirect(appUrl);
+    return NextResponse.redirect(buildAppRedirectUrl(appUrl, returnTo));
   }
 
   const state = crypto.randomBytes(16).toString("hex");
-
-  const cookieStore = await cookies();
   cookieStore.set("oauth_state", state, {
     httpOnly: true,
     secure: true,
