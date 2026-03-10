@@ -59,11 +59,13 @@ export function JobsTable({ jobs, total, page, pageSize }: Props) {
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
+            <TableHead>Requested By</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Schedule</TableHead>
             <TableHead>Enabled</TableHead>
             <TableHead>Executions</TableHead>
             <TableHead>Last Run</TableHead>
+            <TableHead>Created</TableHead>
             <TableHead>Priority</TableHead>
           </TableRow>
         </TableHeader>
@@ -75,6 +77,7 @@ export function JobsTable({ jobs, total, page, pageSize }: Props) {
                   {job.name}
                 </Link>
               </TableCell>
+              <TableCell className="text-muted-foreground text-sm">{job.requestedBy}</TableCell>
               <TableCell>
                 <Badge variant={job.status === "completed" ? "success" : job.status === "failed" ? "destructive" : "secondary"}>
                   {job.status}
@@ -97,12 +100,13 @@ export function JobsTable({ jobs, total, page, pageSize }: Props) {
               </TableCell>
               <TableCell>{job.executionCount}</TableCell>
               <TableCell className="text-muted-foreground text-sm">{formatDate(job.lastExecutedAt)}</TableCell>
+              <TableCell className="text-muted-foreground text-sm">{formatDate(job.createdAt)}</TableCell>
               <TableCell><Badge variant="outline">{job.priority}</Badge></TableCell>
             </TableRow>
           ))}
           {jobs.length === 0 && (
             <TableRow>
-              <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                 No jobs found
               </TableCell>
             </TableRow>

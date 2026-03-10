@@ -17,6 +17,8 @@ interface RetrievalOptions {
   limit?: number;
   /** Minimum relevance score threshold */
   minRelevanceScore?: number;
+  /** Skip privacy filter (for admin dashboard) */
+  adminMode?: boolean;
 }
 
 const MAX_FULLTEXT_LEXEMES = 8;
@@ -64,7 +66,7 @@ async function extractLexemes(
 export async function retrieveMemories(
   options: RetrievalOptions,
 ): Promise<Memory[]> {
-  const { query, queryEmbedding: precomputed, currentUserId, limit = 20, minRelevanceScore = 0.1 } = options;
+  const { query, queryEmbedding: precomputed, currentUserId, limit = 20, minRelevanceScore = 0.1, adminMode = false } = options;
   const start = Date.now();
 
   try {
@@ -76,11 +78,13 @@ export async function retrieveMemories(
     const CANDIDATE_POOL_SIZE = Math.max(25, limit);
     const embeddingLiteral = JSON.stringify(queryEmbedding);
 
-    const privacyFilter = sql`(
-      ${memories.sourceChannelType} != 'dm'
-      OR ${memories.shareable} = 1
-      OR ${memories.relatedUserIds} @> ARRAY[${currentUserId}]::text[]
-    )`;
+    const privacyFilter = adminMode
+      ? sql`TRUE`
+      : sql`(
+        ${memories.sourceChannelType} != 'dm'
+        OR ${memories.shareable} = 1
+        OR ${memories.relatedUserIds} @> ARRAY[${currentUserId}]::text[]
+      )`;
 
     const baseFilter = sql`${memories.embedding} IS NOT NULL AND ${memories.relevanceScore} >= ${minRelevanceScore}`;
 

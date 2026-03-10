@@ -62,6 +62,7 @@ export const messages = pgTable(
     content: text("content").notNull(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     tokenUsage: jsonb("token_usage").$type<{ inputTokens: number; outputTokens: number; totalTokens: number }>(),
+    model: text("model"),
     embedding: vector("embedding", { dimensions: 1536 }),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },

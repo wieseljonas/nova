@@ -19,8 +19,61 @@ const memoryCols = {
   updatedAt: memories.updatedAt,
 };
 
+async function hybridSearch(search: string, limit: number) {
+  const apiUrl = process.env.AURA_API_URL;
+  const apiSecret = process.env.DASHBOARD_API_SECRET;
+  if (!apiUrl || !apiSecret) return null;
+
+  try {
+    const res = await fetch(`${apiUrl}/api/memories/search?q=${encodeURIComponent(search)}&limit=${limit}`, {
+      headers: { Authorization: `Bearer ${apiSecret}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.ok || !Array.isArray(data.memories)) return null;
+    return data.memories as Array<{
+      id: string;
+      content: string;
+      type: "fact" | "decision" | "personal" | "relationship" | "sentiment" | "open_thread";
+      sourceChannelType: "dm" | "public_channel" | "private_channel";
+      relevanceScore: number;
+      shareable: number;
+      createdAt: string;
+      updatedAt: string;
+      relatedUserIds: string[];
+    }>;
+  } catch {
+    return null;
+  }
+}
+
 export async function getMemories(search?: string, type?: string, page = 1, limit = 100) {
   const offset = (page - 1) * limit;
+
+  // When searching, try the hybrid API first (embeddings + full-text + reranking)
+  if (search) {
+    const hybridResults = await hybridSearch(search, limit);
+    if (hybridResults && hybridResults.length > 0) {
+      let filtered = hybridResults;
+      if (type) filtered = filtered.filter((m) => m.type === type);
+
+      const total = filtered.length;
+      const paged = filtered.slice(offset, offset + limit);
+
+      return {
+        items: paged.map((m) => ({
+          ...m,
+          sourceMessageId: null,
+          embedding: null,
+          createdAt: new Date(m.createdAt),
+          updatedAt: new Date(m.updatedAt),
+        })),
+        total,
+      };
+    }
+    // Fall through to full-text search if hybrid API is unavailable
+  }
 
   const conditions = [];
   if (type) conditions.push(eq(memories.type, type as any));

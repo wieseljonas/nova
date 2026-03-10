@@ -198,9 +198,9 @@ export async function executeJob(
     }));
 
     const tokenUsage = {
-      input: usage.inputTokens,
-      output: usage.outputTokens,
-      total: usage.totalTokens,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
     };
 
     // Update execution trace with results

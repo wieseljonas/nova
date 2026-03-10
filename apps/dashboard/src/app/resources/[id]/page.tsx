@@ -1,10 +1,9 @@
 import { getResource } from "../actions";
 import { notFound } from "next/navigation";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft } from "lucide-react";
+import { MarkdownContent } from "@/components/ui/markdown";
+import { BackButton } from "@/components/back-button";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -17,9 +16,7 @@ export default async function ResourceDetailPage({ params }: { params: Promise<{
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <Link href="/resources">
-          <Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button>
-        </Link>
+        <BackButton />
         <div>
           <h1 className="text-base font-semibold">{resource.title || "Untitled"}</h1>
           <a href={resource.url} target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:underline">
@@ -63,9 +60,7 @@ export default async function ResourceDetailPage({ params }: { params: Promise<{
         <Card>
           <CardHeader><CardTitle className="text-sm">Content</CardTitle></CardHeader>
           <CardContent>
-            <pre className="whitespace-pre-wrap text-xs font-mono bg-muted rounded-md p-3 overflow-auto max-h-[500px]">
-              {resource.content}
-            </pre>
+            <MarkdownContent content={resource.content} className="max-w-3xl" />
           </CardContent>
         </Card>
       )}
