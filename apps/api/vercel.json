@@ -1,4 +1,6 @@
 {
+  "framework": null,
+  "buildCommand": "pnpm --filter @aura/db build && pnpm --filter @aura/db db:migrate && mkdir -p public && echo '{}' > public/.keep",
   "regions": [
     "fra1"
   ],

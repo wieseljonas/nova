@@ -11,7 +11,7 @@ function getSecret() {
 }
 
 export async function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname, search } = request.nextUrl;
 
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
@@ -19,7 +19,9 @@ export async function middleware(request: NextRequest) {
 
   const token = request.cookies.get("aura_session")?.value;
   if (!token) {
-    return NextResponse.redirect(new URL("/api/auth/login", request.url));
+    const loginUrl = new URL("/api/auth/login", request.url);
+    loginUrl.searchParams.set("returnTo", `${pathname}${search}`);
+    return NextResponse.redirect(loginUrl);
   }
 
   try {
@@ -30,7 +32,9 @@ export async function middleware(request: NextRequest) {
     response.headers.set("x-user-picture", payload.picture as string);
     return response;
   } catch {
-    return NextResponse.redirect(new URL("/api/auth/login", request.url));
+    const loginUrl = new URL("/api/auth/login", request.url);
+    loginUrl.searchParams.set("returnTo", `${pathname}${search}`);
+    return NextResponse.redirect(loginUrl);
   }
 }
 
