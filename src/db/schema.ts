@@ -695,7 +695,7 @@ export const credentials = pgTable(
     ),
     check(
       "credentials_auth_scheme_check",
-      sql`${table.authScheme} IN ('bearer', 'basic', 'header', 'query', 'oauth_client')`,
+      sql`${table.authScheme} IN ('bearer', 'basic', 'header', 'query', 'oauth_client', 'google_service_account')`,
     ),
   ],
 );
