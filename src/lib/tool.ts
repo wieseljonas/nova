@@ -161,8 +161,8 @@ export function defineTool<TInput, TOutput>(config: {
       });
     }
 
-    // Destructive: write pending log → post approval message → throw
-    if (riskTier === "destructive") {
+    // Gate any data-modifying request (write + destructive) behind approval
+    if (riskTier === "destructive" || riskTier === "write") {
       const [logEntry] = await db
         .insert(actionLog)
         .values({
