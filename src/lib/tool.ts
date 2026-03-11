@@ -145,7 +145,7 @@ export function defineTool<TInput, TOutput>(config: {
 
   const toolConfig: Record<string, unknown> = {
     description: rest.description,
-    parameters: rest.inputSchema,
+    inputSchema: rest.inputSchema,
     execute: loggedExecute,
     // SDK-native approval: check risk tier dynamically
     needsApproval: async (input: TInput) => {
