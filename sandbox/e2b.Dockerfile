@@ -1,6 +1,9 @@
 # Aura sandbox template
-# Build: cd sandbox && E2B_API_KEY=e2b_xxx e2b template create aura-sandbox
+# Build via SDK:  E2B_API_KEY=e2b_xxx npx tsx sandbox/build-tsx.ts
+# Build via CLI:  E2B_API_KEY=e2b_xxx e2b template create aura-sandbox --dockerfile sandbox/e2b.Dockerfile
 # After build: set E2B_TEMPLATE_ID in Vercel env vars
+#
+# IMPORTANT: Keep in sync with build-tsx.ts in this directory.
 
 FROM ubuntu:22.04
 
