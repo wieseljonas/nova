@@ -13,6 +13,7 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     postgresql-client \
     jq \
     ripgrep \
+    sqlite3 \
     curl \
     git \
     wget \
@@ -53,6 +54,9 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
 
 # Vercel CLI
 RUN npm install -g vercel@latest
+
+# pnpm (monorepo package manager)
+RUN npm install -g pnpm
 
 # Claude Code
 RUN npm install -g @anthropic-ai/claude-code
