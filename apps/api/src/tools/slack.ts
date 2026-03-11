@@ -23,6 +23,7 @@ import { createVoiceTools } from "./voice.js";
 import { createResourceTools } from "./resources.js";
 import { createCredentialTools } from "./credentials.js";
 import { createHttpRequestTool } from "./http-request.js";
+import { createDateTimeTools } from "./datetime.js";
 import type { ScheduleContext } from "@aura/db/schema";
 import { formatForSlack } from "../lib/format.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
@@ -542,6 +543,9 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
   }
 
   const tools: Record<string, any> = {
+    // ── Date/Time Tools (eager — always available) ───────────────────────
+    ...createDateTimeTools(),
+
     list_channels: defineTool({
       description:
         "List Slack channels that Aura is currently a member of (names, topics, member count). Important: this only shows channels Aura has already joined, NOT all public channels in the workspace. Many public channels exist that aren't listed here. To find or join others, use search_channels to fuzzy-search by name, or join_channel with the exact channel name.",
