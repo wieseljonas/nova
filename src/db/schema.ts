@@ -564,6 +564,7 @@ export const actionLog = pgTable(
       messages: Array<{role: string; content: unknown; [key: string]: unknown}>; // Full AI SDK messages for replay on resumption
       toolCallId: string; // Tool call ID needing approval
       approvalId?: string; // SDK approval ID
+      assistantToolCall?: { toolName: string; toolCallId: string; input: unknown }; // The tool call that triggered approval
       stablePrefix: string;
       conversationContext: string;
       dynamicContext?: string;

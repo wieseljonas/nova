@@ -98,19 +98,42 @@ export async function resumeConversationAfterApproval(args: {
       messageCount: state.messages.length,
     });
 
-    // 2. Build the approval response message
+    // 2. Reconstruct the full message history for SDK replay
+    // The SDK expects: user message -> assistant (with tool call + approval request) -> tool (approval response)
+    // state.messages has the user input; state.assistantToolCall has the tool call details
+    const assistantMessage = state.assistantToolCall ? {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: state.toolCallId,
+          toolName: state.assistantToolCall.toolName,
+          args: state.assistantToolCall.input,
+        },
+        {
+          type: "tool-approval-request" as const,
+          toolCallId: state.toolCallId,
+          approvalId: state.approvalId,
+        },
+      ],
+    } : null;
+
     const approvalMessage = {
       role: "tool" as const,
       content: [
         {
           type: "tool-approval-response" as const,
-          toolCallId: state.toolCallId,
+          approvalId: state.approvalId,
           approved: true,
         },
       ],
     };
 
-    const messages = [...state.messages, approvalMessage];
+    const messages = [
+      ...state.messages,
+      ...(assistantMessage ? [assistantMessage] : []),
+      approvalMessage,
+    ];
 
     // 3. Recreate the agent to get tools, then use generateText with stepCountIs
     // We use generateText directly (not agent.generate) to set a tight step limit
