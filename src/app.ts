@@ -17,6 +17,7 @@ import {
   openUpdateCredentialModal,
   openShareCredentialModal,
   openCredentialAccessModal,
+  openCredentialPermissionsModal,
 } from "./slack/home.js";
 import {
   storeApiCredential,
@@ -24,6 +25,7 @@ import {
   grantApiCredentialAccess,
   listApiCredentials,
   hasPermission,
+  updateCredentialMethods,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
 import { handleApprovalReaction } from "./lib/approval.js";
@@ -557,6 +559,26 @@ app.post("/api/slack/interactions", async (c) => {
             recordError("interactions.api_credential_access_modal", err, { userId, credId });
           });
           waitUntil(accessPromise);
+        } else if (selectedValue.startsWith("api_credential_permissions_") && payload.trigger_id) {
+          const credId = selectedValue.replace("api_credential_permissions_", "");
+          const permissionsPromise = (async () => {
+            try {
+              const creds = await listApiCredentials(userId);
+              const cred = creds.find((c) => c.id === credId);
+              if (cred) {
+                await openCredentialPermissionsModal(
+                  slackClient,
+                  payload.trigger_id!,
+                  credId,
+                  cred.name,
+                  cred.allowed_methods,
+                );
+              }
+            } catch (err) {
+              recordError("interactions.api_credential_permissions_modal", err, { userId, credId });
+            }
+          })();
+          waitUntil(permissionsPromise);
         }
       }
 
@@ -915,6 +937,24 @@ function extractCredentialValue(
           }
         })();
         waitUntil(sharePromise);
+      }
+    }
+
+    if (callbackId === "api_credential_permissions_submit" && userId) {
+      const credentialId = payload.view?.private_metadata;
+      const selectedOptions = payload.view?.state?.values?.methods_block?.methods_checkboxes?.selected_options ?? [];
+      const allowedMethods = selectedOptions.map((opt: any) => opt.value);
+
+      if (credentialId) {
+        const permissionsPromise = (async () => {
+          try {
+            await updateCredentialMethods(credentialId, userId, allowedMethods);
+            await publishHomeTab(slackClient, userId);
+          } catch (err) {
+            recordError("interactions.api_credential_permissions_update", err, { userId, credentialId });
+          }
+        })();
+        waitUntil(permissionsPromise);
       }
     }
 

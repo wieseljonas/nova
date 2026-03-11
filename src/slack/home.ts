@@ -237,6 +237,12 @@ async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): 
         value: `api_credential_update_${cred.id}`,
       });
     }
+    if (canWrite) {
+      overflowOptions.push({
+        text: { type: "plain_text", text: "Permissions" },
+        value: `api_credential_permissions_${cred.id}`,
+      });
+    }
     if (isOwner) {
       overflowOptions.push(
         {
@@ -258,11 +264,17 @@ async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): 
       });
     }
 
+    let methodsText = "";
+    if (cred.allowed_methods && cred.allowed_methods.length > 0) {
+      const methods = cred.allowed_methods.map(m => m.toUpperCase()).join(", ");
+      methodsText = `\nAllowed methods (skip approval): ${methods}`;
+    }
+
     const section: any = {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${cred.name}*  ·  _${source}_ (${permLabel})${expiryText}`,
+        text: `*${cred.name}*  ·  _${source}_ (${permLabel})${expiryText}${methodsText}`,
       },
     };
     if (overflowOptions.length > 0) {
@@ -687,6 +699,65 @@ export async function openCredentialAccessModal(
       title: { type: "plain_text", text: "Credential Access" },
       close: { type: "plain_text", text: "Close" },
       blocks,
+    },
+  });
+}
+
+export async function openCredentialPermissionsModal(
+  client: WebClient,
+  triggerId: string,
+  credentialId: string,
+  credentialName: string,
+  currentMethods: string[] | null,
+): Promise<void> {
+  const allMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+  const selected = (currentMethods ?? []).map(m => m.toUpperCase());
+
+  await client.views.open({
+    trigger_id: triggerId,
+    view: {
+      type: "modal",
+      callback_id: "api_credential_permissions_submit",
+      private_metadata: credentialId,
+      title: { type: "plain_text", text: "HTTP Permissions" },
+      submit: { type: "plain_text", text: "Save" },
+      close: { type: "plain_text", text: "Cancel" },
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Configure HTTP methods that skip approval for *${credentialName}*`,
+          },
+        },
+        {
+          type: "input",
+          block_id: "methods_block",
+          label: { type: "plain_text", text: "Allowed Methods (skip approval)" },
+          optional: true,
+          element: {
+            type: "checkboxes",
+            action_id: "methods_checkboxes",
+            options: allMethods.map(method => ({
+              text: { type: "plain_text", text: method },
+              value: method,
+            })),
+            initial_options: selected.map(method => ({
+              text: { type: "plain_text", text: method },
+              value: method,
+            })),
+          },
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: "Requests with these methods will execute without approval. Other methods still require approval based on policy rules.",
+            },
+          ],
+        },
+      ],
     },
   });
 }

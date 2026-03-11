@@ -165,15 +165,31 @@ export function defineTool<TInput, TOutput>(config: {
 
       try {
         const httpInput = input as Record<string, unknown>;
+        const credentialName = httpInput.credential_name as string | undefined;
+        const method = (httpInput.method as string | undefined) ?? "GET";
+
+        // Check credential-level allowed methods
+        if (credentialName && ctx?.triggeredBy) {
+          const { getCredentialMethods } = await import("./api-credentials.js");
+          const allowedMethods = await getCredentialMethods(credentialName, ctx.triggeredBy);
+          if (allowedMethods && allowedMethods.length > 0) {
+            const methodUpper = method.toUpperCase();
+            if (allowedMethods.map(m => m.toUpperCase()).includes(methodUpper)) {
+              // Method is in the allowed list, skip approval
+              return false;
+            }
+          }
+        }
+
         const policy = await lookupPolicy({
           toolName,
           url: httpInput.url as string | undefined,
-          method: httpInput.method as string | undefined,
-          credentialName: httpInput.credential_name as string | undefined,
+          method,
+          credentialName,
         });
         const riskTier = effectiveRiskTier(
           policy,
-          httpInput.method as string | undefined,
+          method,
         );
         // Write and destructive tiers need approval
         return riskTier === "write" || riskTier === "destructive";
