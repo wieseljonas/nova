@@ -279,6 +279,7 @@ export async function generateResponse(
   // chat.startStream. When we detect this, we flip to buffer-only mode
   // and post the final result via chat.postMessage.
   let streamingFailed = skipStreaming;
+  let hitlApprovalRequested = false;
 
   async function tryStreamAppend(payload: any): Promise<void> {
     if (streamingFailed) return;
@@ -895,6 +896,7 @@ export async function generateResponse(
             } catch { /* last resort - already logged above */ }
           }
 
+          hitlApprovalRequested = true;
           break;
         }
       }
@@ -1090,6 +1092,21 @@ export async function generateResponse(
     clearTimeout(inactivityTimer);
     if (toolKeepAlive) { clearInterval(toolKeepAlive); toolKeepAlive = null; }
     if (streamKeepAlive) { clearInterval(streamKeepAlive); streamKeepAlive = null; }
+
+    // HITL: when an approval request was handled, the stream ends without text output.
+    // The SDK throws AI_NoOutputGeneratedError -- this is expected, not an error.
+    if (hitlApprovalRequested && error?.name === "AI_NoOutputGeneratedError") {
+      logger.info("HITL: stream ended after approval request (expected)", { channelId, threadTs });
+      if (streamer) {
+        try { await streamer.stop(); } catch { /* ok */ }
+      }
+      return {
+        raw: accumulatedText || "",
+        alreadyPosted: true,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        toolCalls: [],
+      };
+    }
 
     if (hasFiles && isUnsupportedFileError(error)) {
       logger.warn("LLM call failed due to unsupported file type, retrying without file parts", {
