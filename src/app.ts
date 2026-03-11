@@ -637,6 +637,35 @@ app.post("/api/slack/interactions", async (c) => {
       // ── Governance approval buttons ─────────────────────────────────
       if (action.action_id?.startsWith("governance_approve_")) {
         const actionLogId = action.action_id.replace("governance_approve_", "");
+
+        // Immediately update the approval message to show "executing" state
+        const messageTs = payload.message?.ts;
+        const channelId = payload.channel?.id;
+        if (messageTs && channelId) {
+          const originalBlocks = (payload.message?.blocks ?? []) as any[];
+          // Remove the actions block (buttons) and update context to show executing
+          const updatedBlocks = originalBlocks
+            .filter((b: any) => b.type !== "actions")
+            .map((b: any) => {
+              if (b.type === "context") {
+                return {
+                  type: "context",
+                  elements: [{
+                    type: "mrkdwn",
+                    text: `:hourglass_flowing_sand: Approved by <@${userId}> -- executing now...`,
+                  }],
+                };
+              }
+              return b;
+            });
+          waitUntil(slackClient.chat.update({
+            channel: channelId,
+            ts: messageTs,
+            blocks: updatedBlocks,
+            text: `Approved by <@${userId}> -- executing...`,
+          }).catch((err: any) => logger.warn("Failed to update approval message", { err })));
+        }
+
         const approvePromise = (async () => {
           try {
             const { handleApprovalReaction } = await import("./lib/approval.js");
@@ -664,6 +693,34 @@ app.post("/api/slack/interactions", async (c) => {
 
       if (action.action_id?.startsWith("governance_reject_")) {
         const actionLogId = action.action_id.replace("governance_reject_", "");
+
+        // Immediately update the approval message to show rejected state
+        const rejectMessageTs = payload.message?.ts;
+        const rejectChannelId = payload.channel?.id;
+        if (rejectMessageTs && rejectChannelId) {
+          const originalBlocks = (payload.message?.blocks ?? []) as any[];
+          const updatedBlocks = originalBlocks
+            .filter((b: any) => b.type !== "actions")
+            .map((b: any) => {
+              if (b.type === "context") {
+                return {
+                  type: "context",
+                  elements: [{
+                    type: "mrkdwn",
+                    text: `:x: Rejected by <@${userId}>`,
+                  }],
+                };
+              }
+              return b;
+            });
+          waitUntil(slackClient.chat.update({
+            channel: rejectChannelId,
+            ts: rejectMessageTs,
+            blocks: updatedBlocks,
+            text: `Rejected by <@${userId}>`,
+          }).catch((err: any) => logger.warn("Failed to update rejection message", { err })));
+        }
+
         const rejectPromise = (async () => {
           try {
             const { handleApprovalReaction } = await import("./lib/approval.js");
