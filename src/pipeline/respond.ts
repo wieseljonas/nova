@@ -6,7 +6,7 @@ import { logError } from "../lib/error-logger.js";
 import { formatForSlack, prettifyAndWrapTable } from "../lib/format.js";
 import { TABLE_BLOCK_KEY } from "../tools/table.js";
 import { safePostMessage, isChannelTypeNotSupported, isInvalidBlocks, isMsgTooLong } from "../lib/slack-messaging.js";
-import { getSlackMeta, executionContext } from "../lib/tool.js";
+import { getSlackMeta, getToolDescription, executionContext } from "../lib/tool.js";
 import { createInteractiveAgent } from "../lib/agents.js";
 import { getMainModel, buildCachedSystemMessages } from "../lib/ai.js";
 
@@ -115,6 +115,22 @@ function buildToolMetadata(
 function truncate(s: string | undefined, max: number): string | undefined {
   if (!s) return undefined;
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
+}
+
+function approvalAwaitingTitle(
+  toolDef: unknown,
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  const slackMeta = getSlackMeta(toolDef);
+  const customApprovalStatus =
+    typeof slackMeta?.approvalStatus === "function"
+      ? slackMeta.approvalStatus(input)
+      : slackMeta?.approvalStatus;
+  const description = customApprovalStatus
+    ?? getToolDescription(toolDef)
+    ?? toolName;
+  return truncate(`Awaiting approval: ${description}`, 150) ?? "Awaiting approval";
 }
 
 
@@ -786,6 +802,45 @@ export async function generateResponse(
           });
 
           try {
+            const approvalToolDef = tools[approvalToolName];
+            const approvalSlackMeta = getSlackMeta(approvalToolDef);
+            const details = approvalSlackMeta?.detail?.(approvalInput);
+            if (approvalToolCallId) {
+              const awaitingPayload = {
+                chunks: [{
+                  type: "task_update",
+                  id: approvalToolCallId,
+                  title: approvalAwaitingTitle(
+                    approvalToolDef,
+                    approvalToolName,
+                    approvalInput as Record<string, unknown>,
+                  ),
+                  status: "pending",
+                  ...(details && { details }),
+                }],
+              };
+              currentStreamLength += estimateAppendSize(awaitingPayload);
+              if (!streamingFailed) {
+                await tryStreamAppend(awaitingPayload);
+                if (streamingFailed) {
+                  fallbackStartIdx = accumulatedText.length;
+                }
+              }
+            }
+
+            const pending = pendingToolInputs.get(approvalToolCallId);
+            toolCallRecords.push({
+              name: approvalToolName,
+              input: pending?.input ?? truncateToBytes(JSON.stringify(approvalInput), 1500),
+              output: "Awaiting human approval",
+              is_error: false,
+            });
+            if (approvalToolCallId) pendingToolInputs.delete(approvalToolCallId);
+
+            if (pendingToolInputs.size === 0 && toolKeepAlive) { clearInterval(toolKeepAlive); toolKeepAlive = null; }
+            if (pendingToolInputs.size === 0 && streamKeepAlive) { clearInterval(streamKeepAlive); streamKeepAlive = null; }
+            resetTimer();
+
             // Save conversation state for resumption after approval
             const { db } = await import("../db/client.js");
             const { actionLog } = await import("../db/schema.js");

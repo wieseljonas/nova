@@ -8,6 +8,37 @@ import { logError } from "./error-logger.js";
 import { executionContext } from "./tool.js";
 import { isAdmin } from "./permissions.js";
 
+function truncateSummary(text: string, max = 500): string {
+  return text.length <= max ? text : `${text.slice(0, max)}...`;
+}
+
+async function updateApprovalMessage(args: {
+  slackClient: WebClient;
+  channelId?: string | null;
+  messageTs?: string | null;
+  text: string;
+  blocks: Array<Record<string, unknown>>;
+}): Promise<boolean> {
+  const { slackClient, channelId, messageTs, text, blocks } = args;
+  if (!channelId || !messageTs) return false;
+  try {
+    await slackClient.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      text,
+      blocks: blocks as any,
+    });
+    return true;
+  } catch (err) {
+    logger.warn("HITL: failed to update approval message", {
+      channelId,
+      messageTs,
+      error: err,
+    });
+    return false;
+  }
+}
+
 /**
  * Resume a conversation after tool approval using SDK-native message replay.
  *
@@ -19,7 +50,7 @@ import { isAdmin } from "./permissions.js";
  * 2. Append a tool-approval-response message (approved: true)
  * 3. Re-invoke generateText with the full message history + all tools
  * 4. The SDK executes the tool naturally and continues the conversation
- * 5. Update action_log status and post the result to Slack
+ * 5. Update action_log status and update the approval card with result summary
  */
 export async function resumeConversationAfterApproval(args: {
   actionLogId: string;
@@ -198,16 +229,47 @@ export async function resumeConversationAfterApproval(args: {
         .where(eq(actionLog.id, actionLogId));
     } catch { /* non-critical */ }
 
-    // 5. Post the result to Slack
+    // 5. Update the original approval message with a result summary
     const { formatForSlack } = await import("./format.js");
-    const { safePostMessage } = await import("./slack-messaging.js");
-
     const responseText = result.text || "Tool executed successfully.";
-    await safePostMessage(slackClient, {
-      channel: state.channelId,
-      thread_ts: state.threadTs,
-      text: formatForSlack(responseText),
+    const formattedSummary = truncateSummary(formatForSlack(responseText), 700);
+    const updated = await updateApprovalMessage({
+      slackClient,
+      channelId: entry.approvalChannelId,
+      messageTs: entry.approvalMessageTs,
+      text: `Approved by <@${approvedBy}>`,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*Approved by <@${approvedBy}>*`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*Result summary:*\n${formattedSummary || "_No text response_"}`,
+          },
+        },
+        {
+          type: "context",
+          elements: [
+            { type: "mrkdwn", text: `\`action_log_id: ${actionLogId}\`` },
+          ],
+        },
+      ],
     });
+
+    if (!updated) {
+      const { safePostMessage } = await import("./slack-messaging.js");
+      await safePostMessage(slackClient, {
+        channel: state.channelId,
+        thread_ts: state.threadTs,
+        text: formatForSlack(responseText),
+      });
+    }
 
     logger.info("HITL resumption: completed successfully", {
       actionLogId,
@@ -234,6 +296,48 @@ export async function resumeConversationAfterApproval(args: {
         .where(eq(actionLog.id, actionLogId));
     } catch { /* non-critical */ }
 
+    try {
+      const rows = await db
+        .select({
+          approvalChannelId: actionLog.approvalChannelId,
+          approvalMessageTs: actionLog.approvalMessageTs,
+        })
+        .from(actionLog)
+        .where(eq(actionLog.id, actionLogId))
+        .limit(1);
+      const uiEntry = rows[0];
+      if (uiEntry) {
+        await updateApprovalMessage({
+          slackClient,
+          channelId: uiEntry.approvalChannelId,
+          messageTs: uiEntry.approvalMessageTs,
+          text: `Approved by <@${approvedBy}> - execution failed`,
+          blocks: [
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*Approved by <@${approvedBy}>*`,
+              },
+            },
+            {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: `*Execution failed:* ${truncateSummary(err.message || "Unknown error", 350)}`,
+              },
+            },
+            {
+              type: "context",
+              elements: [
+                { type: "mrkdwn", text: `\`action_log_id: ${actionLogId}\`` },
+              ],
+            },
+          ],
+        });
+      }
+    } catch { /* non-critical */ }
+
     logError({
       errorName: "HitlResumptionError",
       errorMessage: err.message,
@@ -248,7 +352,7 @@ export async function resumeConversationAfterApproval(args: {
 /**
  * Handle rejection of a tool call.
  *
- * When a destructive tool is rejected, notify the user in the thread.
+ * When a destructive tool is rejected, update the original approval card.
  */
 export async function handleToolRejection(args: {
   actionLogId: string;
@@ -269,41 +373,59 @@ export async function handleToolRejection(args: {
       return { ok: false, error: "Action log entry not found" };
     }
 
-    // Update status to rejected only if still pending_approval (atomic CAS)
-    const updated = await db
-      .update(actionLog)
-      .set({ status: "rejected" })
-      .where(
-        and(
-          eq(actionLog.id, actionLogId),
-          eq(actionLog.status, "pending_approval"),
-        ),
-      )
-      .returning({ id: actionLog.id });
-
-    if (updated.length === 0) {
-      logger.warn("Tool rejection skipped: action already resolved", {
+    if (entry.status === "pending_approval") {
+      const updated = await db
+        .update(actionLog)
+        .set({ status: "rejected" })
+        .where(
+          and(
+            eq(actionLog.id, actionLogId),
+            eq(actionLog.status, "pending_approval"),
+          ),
+        )
+        .returning({ id: actionLog.id });
+      if (updated.length === 0) {
+        logger.warn("Tool rejection skipped: action already resolved", {
+          actionLogId,
+          currentStatus: entry.status,
+        });
+        return { ok: false, error: "Action already resolved" };
+      }
+    } else if (entry.status !== "rejected") {
+      logger.warn("Tool rejection skipped: unexpected status", {
         actionLogId,
         currentStatus: entry.status,
       });
-      return { ok: false, error: "Action already resolved" };
+      return { ok: false, error: `Unexpected status ${entry.status}` };
     }
 
-    const state = entry.conversationState;
-    if (!state) {
-      logger.info("Tool rejected (no resumption needed)", {
-        actionLogId,
-        toolName: entry.toolName,
-      });
-      return { ok: true };
-    }
-
-    // Notify the user that the tool was rejected
-    const { safePostMessage } = await import("./slack-messaging.js");
-    await safePostMessage(slackClient, {
-      channel: state.channelId,
-      thread_ts: state.threadTs,
-      text: `The requested action (\`${entry.toolName}\`) was rejected by <@${rejectedBy}>. I won't proceed with that operation.`,
+    await updateApprovalMessage({
+      slackClient,
+      channelId: entry.approvalChannelId,
+      messageTs: entry.approvalMessageTs,
+      text: `Rejected by <@${rejectedBy}>`,
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*Rejected by <@${rejectedBy}>*`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Action \`${entry.toolName}\` will not be executed.`,
+          },
+        },
+        {
+          type: "context",
+          elements: [
+            { type: "mrkdwn", text: `\`action_log_id: ${actionLogId}\`` },
+          ],
+        },
+      ],
     });
 
     logger.info("Tool rejection handled", {
