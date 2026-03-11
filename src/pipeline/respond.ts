@@ -785,6 +785,41 @@ export async function generateResponse(
             approvalId,
           });
 
+          // Update the tool card to show "awaiting approval" instead of leaving it as in_progress
+          // (which Slack renders as error when the stream ends without a tool-result)
+          const approvalSlackMeta = getSlackMeta(tools[approvalToolName]);
+          const approvalTitle = approvalSlackMeta?.status ?? approvalToolName;
+          const approvalDetails = approvalSlackMeta?.detail?.(approvalInput);
+          const approvalCardPayload = {
+            chunks: [{
+              type: "task_update",
+              id: approvalToolCallId,
+              title: approvalTitle,
+              status: "complete",
+              ...(approvalDetails && { details: approvalDetails }),
+            }],
+          };
+          currentStreamLength += estimateAppendSize(approvalCardPayload);
+          if (!streamingFailed) {
+            await tryStreamAppend(approvalCardPayload);
+            if (streamingFailed) {
+              fallbackStartIdx = accumulatedText.length;
+            }
+          }
+
+          // Record the tool call as awaiting approval (not an error)
+          const approvalPending = pendingToolInputs.get(approvalToolCallId);
+          toolCallRecords.push({
+            name: approvalToolName,
+            input: approvalPending?.input ?? "{}",
+            output: truncateToBytes(JSON.stringify({ status: "awaiting_approval" }), 1500),
+            is_error: false,
+          });
+          pendingToolInputs.delete(approvalToolCallId);
+
+          if (pendingToolInputs.size === 0 && toolKeepAlive) { clearInterval(toolKeepAlive); toolKeepAlive = null; }
+          if (pendingToolInputs.size === 0 && streamKeepAlive) { clearInterval(streamKeepAlive); streamKeepAlive = null; }
+
           try {
             // Save conversation state for resumption after approval
             const { db } = await import("../db/client.js");
