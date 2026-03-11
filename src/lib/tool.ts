@@ -151,8 +151,9 @@ export function defineTool<TInput, TOutput>(config: {
     needsApproval: async (input: TInput) => {
       const toolName = toolRef.name || "unknown";
 
-      // Only http_request needs approval gating -- all other tools pass through
-      if (toolName !== "http_request") {
+      // Only http_request needs approval gating -- all other known tools pass through
+      // If toolRef.name is unset (unknown tool), fail-closed to require approval
+      if (toolName !== "http_request" && toolRef.name) {
         return false;
       }
 

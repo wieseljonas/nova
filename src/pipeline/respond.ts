@@ -831,7 +831,7 @@ export async function generateResponse(
                   threadTs,
                   userId: ctx.triggeredBy,
                   channelType: options.channelType || "channel",
-                  messages: streamCallOptions.messages || (streamCallOptions.prompt ? [{ role: "user" as const, content: streamCallOptions.prompt }] : []),
+                  messages: streamCallOptions.messages || (streamCallOptions.prompt != null ? [{ role: "user" as const, content: streamCallOptions.prompt }] : []),
                   toolCallId: approvalToolCallId,
                   approvalId,
                   stablePrefix: options.stablePrefix,
