@@ -439,6 +439,7 @@ export async function listApiCredentials(
     authScheme: AuthScheme;
     owner_id: string;
     expires_at: Date | null;
+    allowed_methods: string[] | null;
     permission: "owner" | "read" | "write" | "admin";
   }>
 > {
@@ -449,6 +450,7 @@ export async function listApiCredentials(
       authScheme: credentials.authScheme,
       owner_id: credentials.ownerId,
       expires_at: credentials.expiresAt,
+      allowed_methods: credentials.allowedMethods,
     })
     .from(credentials)
     .where(eq(credentials.ownerId, userId));
@@ -460,6 +462,7 @@ export async function listApiCredentials(
       authScheme: credentials.authScheme,
       owner_id: credentials.ownerId,
       expires_at: credentials.expiresAt,
+      allowed_methods: credentials.allowedMethods,
       permission: credentialGrants.permission,
     })
     .from(credentialGrants)
@@ -606,6 +609,55 @@ export async function revokeApiCredentialAccess(
     );
 
   await audit(credentialId, cred.name, revokerId, "revoke", `grantee:${granteeId}`);
+}
+
+export async function getCredentialMethods(
+  credentialName: string,
+  ownerId: string,
+): Promise<string[] | null> {
+  validateName(credentialName);
+
+  const rows = await db
+    .select({ allowedMethods: credentials.allowedMethods })
+    .from(credentials)
+    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, credentialName)))
+    .limit(1);
+
+  if (!rows[0]) return null;
+  return rows[0].allowedMethods ?? [];
+}
+
+export async function updateCredentialMethods(
+  credentialId: string,
+  requestingUserId: string,
+  allowedMethods: string[],
+): Promise<void> {
+  const rows = await db
+    .select()
+    .from(credentials)
+    .where(eq(credentials.id, credentialId))
+    .limit(1);
+
+  const cred = rows[0];
+  if (!cred) throw new Error("Credential not found");
+
+  const allowed = await hasPermission(cred.ownerId, credentialId, requestingUserId, "admin");
+  if (!allowed) {
+    throw new Error("Only the owner or an admin can update credential permissions");
+  }
+
+  await db
+    .update(credentials)
+    .set({ allowedMethods, updatedAt: new Date() })
+    .where(eq(credentials.id, credentialId));
+
+  await audit(
+    credentialId,
+    cred.name,
+    requestingUserId,
+    "update",
+    `allowed_methods: ${JSON.stringify(allowedMethods)}`,
+  );
 }
 
 function scrubValue(error: unknown, plaintext: string): Error {
