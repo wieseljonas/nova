@@ -171,11 +171,11 @@ export function defineTool<TInput, TOutput>(config: {
         // Write and destructive tiers need approval
         return riskTier === "write" || riskTier === "destructive";
       } catch (err) {
-        logger.warn("needsApproval: policy lookup failed, allowing execution", {
+        logger.warn("needsApproval: policy lookup failed, failing closed (requiring approval)", {
           toolName: toolRef.name,
           error: err,
         });
-        return false;
+        return true; // Fail-closed: require approval when policy lookup fails
       }
     },
   };

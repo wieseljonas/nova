@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { generateText, stepCountIs } from "ai";
 import { db } from "../db/client.js";
 import { actionLog } from "../db/schema.js";
@@ -64,6 +64,31 @@ export async function resumeConversationAfterApproval(args: {
         ok: false,
         error: "Missing conversation state, messages, or toolCallId for resumption",
       };
+    }
+
+    // P1-2: Validate messages array structure before replay
+    if (!Array.isArray(state.messages) || state.messages.length === 0) {
+      return {
+        ok: false,
+        error: "Conversation state messages corrupted: not an array or empty",
+      };
+    }
+    const invalidMessages = state.messages.filter(
+      (m: any) => !m || typeof m !== "object" || !m.role,
+    );
+    if (invalidMessages.length > 0) {
+      logger.error("HITL resumption: corrupted messages in conversation state", {
+        actionLogId,
+        invalidCount: invalidMessages.length,
+      });
+      // Post user-facing error
+      const { safePostMessage } = await import("./slack-messaging.js");
+      await safePostMessage(slackClient, {
+        channel: state.channelId,
+        thread_ts: state.threadTs,
+        text: "⚠️ Approval expired — conversation state corrupted. Please retry your original request.",
+      });
+      return { ok: false, error: "Conversation state messages corrupted" };
     }
 
     logger.info("HITL resumption: starting", {
@@ -206,13 +231,25 @@ export async function handleToolRejection(args: {
       return { ok: false, error: "Action log entry not found" };
     }
 
-    // Update status to rejected
-    try {
-      await db
-        .update(actionLog)
-        .set({ status: "rejected" })
-        .where(eq(actionLog.id, actionLogId));
-    } catch { /* non-critical */ }
+    // Update status to rejected only if still pending_approval (atomic CAS)
+    const updated = await db
+      .update(actionLog)
+      .set({ status: "rejected" })
+      .where(
+        and(
+          eq(actionLog.id, actionLogId),
+          eq(actionLog.status, "pending_approval"),
+        ),
+      )
+      .returning({ id: actionLog.id });
+
+    if (updated.length === 0) {
+      logger.warn("Tool rejection skipped: action already resolved", {
+        actionLogId,
+        currentStatus: entry.status,
+      });
+      return { ok: false, error: "Action already resolved" };
+    }
 
     const state = entry.conversationState;
     if (!state) {

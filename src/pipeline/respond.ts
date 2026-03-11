@@ -809,9 +809,9 @@ export async function generateResponse(
               approvalToolName === "http_request" ? (httpInput.method as string) : undefined,
             );
 
-            // Get the messages from the stream response for replay
-            const responseData = await result.response;
-            const responseMessages = responseData?.messages ?? [];
+            // Don't await result.response inside the stream loop - it may not resolve
+            // until the stream finishes, causing a deadlock. Use the input messages
+            // we already have, which are sufficient for replay.
 
             // Insert action_log entry
             const { eq } = await import("drizzle-orm");
@@ -831,10 +831,7 @@ export async function generateResponse(
                   threadTs,
                   userId: ctx.triggeredBy,
                   channelType: options.channelType || "channel",
-                  messages: [
-                    ...(streamCallOptions.messages || []),
-                    ...responseMessages,
-                  ],
+                  messages: streamCallOptions.messages || [],
                   toolCallId: approvalToolCallId,
                   approvalId,
                   stablePrefix: options.stablePrefix,
@@ -887,6 +884,15 @@ export async function generateResponse(
               error: approvalErr?.message,
               stack: approvalErr?.stack,
             });
+            // P0-3: Notify user so the request doesn't silently hang
+            try {
+              const { safePostMessage } = await import("../lib/slack-messaging.js");
+              await safePostMessage(slackClient, {
+                channel: channelId,
+                thread_ts: threadTs,
+                text: `⚠️ Failed to create approval request for \`${approvalToolName}\`. Please retry your request.`,
+              });
+            } catch { /* last resort - already logged above */ }
           }
 
           break;
