@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import type { ZodType } from "zod";
 import { db } from "../db/client.js";
 import { actionLog } from "../db/schema.js";
-import { lookupPolicy, requestApproval, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
+import { lookupPolicy, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
 import { logger } from "./logger.js";
 
 // ── Execution Context (AsyncLocalStorage) ────────────────────────────────────
@@ -15,39 +15,9 @@ export interface ExecutionContext {
   jobId?: string;
   channelId?: string;
   threadTs?: string;
-  // HITL resumption: if set, this tool execution is pre-approved and should bypass governance (P0-2 fix)
-  _approvedActionId?: string;
-  // P1-3: toolCallId from AI SDK stream (if available)
-  toolCallId?: string;
-  // HITL resumption context - populated by pipeline when approval might be needed
-  conversationState?: {
-    userMessage: string;
-    stablePrefix: string;
-    conversationContext: string;
-    dynamicContext?: string;
-    files?: any[];
-    teamId?: string;
-    timezone?: string;
-    modelId?: string;
-    channelType?: string;
-    previousMessages?: any[];
-    toolCallId?: string;
-  };
 }
 
 export const executionContext = new AsyncLocalStorage<ExecutionContext>();
-
-// HITL: Separate storage for conversation state (populated by pipeline)
-export const conversationStateStorage = new AsyncLocalStorage<ExecutionContext["conversationState"]>();
-
-// ── PendingApprovalError ─────────────────────────────────────────────────────
-
-export class PendingApprovalError extends Error {
-  constructor(public readonly actionLogId: string) {
-    super(`Action pending approval: ${actionLogId}`);
-    this.name = "PendingApprovalError";
-  }
-}
 
 // ── Slack Card Metadata ──────────────────────────────────────────────────────
 // Co-located with tool definitions via defineTool() so that Slack card behavior
@@ -89,22 +59,13 @@ interface ToolNameRef {
 
 /**
  * Wrapper around AI SDK's tool() that co-locates Slack card metadata with the
- * tool definition and adds a governance interceptor. Every tool call is logged
- * to action_log; destructive-tier calls are gated behind approval.
+ * tool definition and adds SDK-native needsApproval governance + action logging.
  *
- * Usage:
- * ```ts
- * const myTool = defineTool({
- *   description: "...",
- *   inputSchema: z.object({ query: z.string() }),
- *   execute: async ({ query }) => ({ ok: true, results: [] }),
- *   slack: {
- *     status: "Searching...",
- *     detail: (input) => input.query,
- *     output: (result) => `${result.results.length} results`,
- *   },
- * });
- * ```
+ * Tools with write/destructive risk tier use `needsApproval` to pause for
+ * human approval. The SDK emits a `tool-approval-request` output part, and
+ * respond.ts saves conversation state for resumption.
+ *
+ * Read-tier tools execute immediately with action logging.
  */
 export function defineTool<TInput, TOutput>(config: {
   description: string;
@@ -118,111 +79,18 @@ export function defineTool<TInput, TOutput>(config: {
 
   const toolRef: ToolNameRef = {};
 
-  const governedExecute = async (input: TInput): Promise<TOutput> => {
+  // Wrapped execute that logs to action_log (for read-tier tools)
+  const loggedExecute = async (input: TInput): Promise<TOutput> => {
     const toolName = toolRef.name || "unknown";
     const ctx = executionContext.getStore() ?? {
       triggeredBy: "unknown",
       triggerType: "autonomous" as const,
     };
-    
-    // HITL: Merge conversation state from separate storage if available
-    const conversationState = conversationStateStorage.getStore();
-    if (conversationState && !ctx.conversationState) {
-      (ctx as any).conversationState = conversationState;
-    }
 
-    // P0-2 fix: If this execution is pre-approved, bypass governance entirely
-    if (ctx._approvedActionId) {
-      logger.info("Governance: bypassing approval check for pre-approved action", {
-        toolName,
-        approvedActionId: ctx._approvedActionId,
-      });
-      return await originalExecute(input);
-    }
-
-    let riskTier: "read" | "write" | "destructive" = "write";
-    let policy: ApprovalPolicy | null = null;
-
-    try {
-      const httpInput = input as Record<string, unknown>;
-      const lookup = await lookupPolicy({
-        toolName,
-        url: toolName === "http_request" ? (httpInput.url as string) : undefined,
-        method: toolName === "http_request" ? (httpInput.method as string) : undefined,
-        credentialName: httpInput.credential_name as string | undefined,
-      });
-      policy = lookup;
-      const httpInput2 = input as Record<string, unknown>;
-      riskTier = effectiveRiskTier(policy, toolName === "http_request" ? (httpInput2.method as string) : undefined);
-    } catch (policyErr) {
-      logger.warn("Governance: policy lookup failed, defaulting to write tier", {
-        toolName,
-        error: policyErr,
-      });
-    }
-
-    // Gate any data-modifying request (write + destructive) behind approval
-    if (riskTier === "destructive" || riskTier === "write") {
-      const [logEntry] = await db
-        .insert(actionLog)
-        .values({
-          toolName,
-          params: input as any,
-          triggerType: ctx.triggerType,
-          triggeredBy: ctx.triggeredBy,
-          jobId: ctx.jobId ?? null,
-          credentialName: (input as any)?.credential_name ?? null,
-          riskTier,
-          status: "pending_approval",
-          // Store conversation state for resumption (if available)
-          conversationState: ctx.conversationState ? {
-            channelId: ctx.channelId || "",
-            threadTs: ctx.threadTs,
-            userId: ctx.triggeredBy,
-            channelType: ctx.conversationState.channelType || "dm",
-            userMessage: ctx.conversationState.userMessage,
-            stablePrefix: ctx.conversationState.stablePrefix,
-            conversationContext: ctx.conversationState.conversationContext,
-            dynamicContext: ctx.conversationState.dynamicContext,
-            files: ctx.conversationState.files,
-            teamId: ctx.conversationState.teamId,
-            timezone: ctx.conversationState.timezone,
-            modelId: ctx.conversationState.modelId,
-            // P1-3 fix: Populate previousMessages and toolCallId
-            previousMessages: ctx.conversationState.previousMessages,
-            toolCallId: ctx.toolCallId,
-          } : null,
-        })
-        .returning({ id: actionLog.id });
-
-      const approvalMessageInfo = await requestApproval({
-        actionLogId: logEntry.id,
-        toolName,
-        params: input,
-        riskTier,
-        policy: policy,
-        context: ctx,
-      });
-
-      // Store approval message location for later reference
-      if (approvalMessageInfo) {
-        await db
-          .update(actionLog)
-          .set({
-            approvalMessageTs: approvalMessageInfo.ts,
-            approvalChannelId: approvalMessageInfo.channelId,
-          })
-          .where(eq(actionLog.id, logEntry.id));
-      }
-
-      throw new PendingApprovalError(logEntry.id);
-    }
-
-    // Read / Write: execute, then log result
     let logId: string | undefined;
 
     try {
-      // Write the log entry before execution (captures params before credential injection)
+      // Write the log entry before execution
       try {
         const [logEntry] = await db
           .insert(actionLog)
@@ -233,7 +101,7 @@ export function defineTool<TInput, TOutput>(config: {
             triggeredBy: ctx.triggeredBy,
             jobId: ctx.jobId ?? null,
             credentialName: (input as any)?.credential_name ?? null,
-            riskTier,
+            riskTier: "read",
             status: "executed",
           })
           .returning({ id: actionLog.id });
@@ -275,7 +143,47 @@ export function defineTool<TInput, TOutput>(config: {
     }
   };
 
-  const toolConfig = { ...rest, execute: governedExecute };
+  const toolConfig: Record<string, unknown> = {
+    description: rest.description,
+    parameters: rest.inputSchema,
+    execute: loggedExecute,
+    // SDK-native approval: check risk tier dynamically
+    needsApproval: async (input: TInput) => {
+      const ctx = executionContext.getStore();
+      // Auto-approve in headless/job mode (no interactive user)
+      if (ctx?.triggerType === "scheduled_job" || ctx?.triggerType === "autonomous") {
+        return false;
+      }
+
+      try {
+        const toolName = toolRef.name || "unknown";
+        const httpInput = input as Record<string, unknown>;
+        const policy = await lookupPolicy({
+          toolName,
+          url: toolName === "http_request" ? (httpInput.url as string) : undefined,
+          method: toolName === "http_request" ? (httpInput.method as string) : undefined,
+          credentialName: httpInput.credential_name as string | undefined,
+        });
+        const riskTier = effectiveRiskTier(
+          policy,
+          toolName === "http_request" ? (httpInput.method as string) : undefined,
+        );
+        // Write and destructive tiers need approval
+        return riskTier === "write" || riskTier === "destructive";
+      } catch (err) {
+        logger.warn("needsApproval: policy lookup failed, failing closed (requiring approval)", {
+          toolName: toolRef.name,
+          error: err,
+        });
+        return true; // Fail-closed: require approval when policy lookup fails
+      }
+    },
+  };
+
+  if (rest.toModelOutput) {
+    toolConfig.toModelOutput = rest.toModelOutput;
+  }
+
   const t = tool<TInput, TOutput>(
     toolConfig as unknown as Tool<TInput, TOutput>,
   );
