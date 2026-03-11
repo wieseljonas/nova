@@ -632,12 +632,12 @@ app.post("/api/slack/interactions", async (c) => {
               await slackClient.chat.update({
                 channel: gaChanId,
                 ts: gaTs,
-                text: `✅ Approved by <@${userId}> - executing...`,
+                text: `✅ Approved by <@${userId}> - executing now...`,
                 blocks: [{ 
                   type: "section" as const, 
                   text: { 
                     type: "mrkdwn" as const, 
-                    text: `✅ *Approved* by <@${userId}>\n_Executing tool and resuming conversation..._` 
+                    text: `✅ *Approved* by <@${userId}>\n_Executing now and resuming conversation..._` 
                   } 
                 }],
               });

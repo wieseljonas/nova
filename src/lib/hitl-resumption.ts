@@ -203,6 +203,7 @@ export async function resumeConversationAfterApproval(args: {
     const { safePostMessage } = await import("./slack-messaging.js");
 
     const responseText = result.text || "Tool executed successfully.";
+    // Always post result to the original conversation thread.
     await safePostMessage(slackClient, {
       channel: state.channelId,
       thread_ts: state.threadTs,
@@ -298,7 +299,7 @@ export async function handleToolRejection(args: {
       return { ok: true };
     }
 
-    // Notify the user that the tool was rejected
+    // Notify the user in the original conversation thread.
     const { safePostMessage } = await import("./slack-messaging.js");
     await safePostMessage(slackClient, {
       channel: state.channelId,

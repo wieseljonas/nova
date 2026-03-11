@@ -778,12 +778,31 @@ export async function generateResponse(
           const approvalToolCallId = approvalToolCall.toolCallId || approvalChunk.toolCallId || "";
           const approvalId = approvalChunk.approvalId || "";
           const approvalInput = approvalToolCall.input ?? {};
+          const approvalTitle = `Awaiting approval: ${approvalToolName}`;
 
           logger.info("HITL: tool-approval-request received", {
             toolName: approvalToolName,
             toolCallId: approvalToolCallId,
             approvalId,
           });
+
+          // Slack auto-marks unresolved tasks as error when stream closes.
+          // Mark the card complete with an explicit awaiting-approval title.
+          if (!streamingFailed && approvalToolCallId) {
+            const approvalPendingPayload = {
+              chunks: [{
+                type: "task_update",
+                id: approvalToolCallId,
+                title: approvalTitle,
+                status: "complete",
+              }],
+            };
+            currentStreamLength += estimateAppendSize(approvalPendingPayload);
+            await tryStreamAppend(approvalPendingPayload);
+            if (streamingFailed) {
+              fallbackStartIdx = accumulatedText.length;
+            }
+          }
 
           try {
             // Save conversation state for resumption after approval
