@@ -31,7 +31,30 @@ export function getCurrentTimeContext(timezone?: string): string {
     "EEEE, MMMM d, yyyy h:mm a",
   );
 
-  return `Current time: ${formatted} (${tz})`;
+  return `Current time: ${formatted} (${tz})\nThis week: ${getWeekCalendar(now, tz)}`;
+}
+
+/**
+ * Build a Mon–Sun mini-calendar string for the week containing `date`,
+ * with today marked by asterisks.  Example output:
+ *   "Mon 9 | Tue 10 | *Wed 11* | Thu 12 | Fri 13 | Sat 14 | Sun 15"
+ */
+export function getWeekCalendar(date: Date, timezone: string): string {
+  const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  const todayStr = formatInTimeZone(date, timezone, "yyyy-MM-dd");
+  const todayDow = Number(formatInTimeZone(date, timezone, "i")); // 1=Mon … 7=Sun
+
+  const parts: string[] = [];
+  for (let offset = 1; offset <= 7; offset++) {
+    const diff = offset - todayDow;
+    const d = new Date(date.getTime() + diff * 86_400_000);
+    const dayNum = formatInTimeZone(d, timezone, "d");
+    const dateStr = formatInTimeZone(d, timezone, "yyyy-MM-dd");
+    const label = `${dayNames[offset - 1]} ${dayNum}`;
+    parts.push(dateStr === todayStr ? `*${label}*` : label);
+  }
+  return parts.join(" | ");
 }
 
 /**
