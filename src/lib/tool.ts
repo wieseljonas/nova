@@ -169,9 +169,10 @@ export function defineTool<TInput, TOutput>(config: {
         const method = (httpInput.method as string | undefined) ?? "GET";
 
         // Check credential-level allowed methods
-        if (credentialName && ctx?.triggeredBy) {
+        const credentialOwner = httpInput.credential_owner as string | undefined ?? ctx?.triggeredBy;
+        if (credentialName && credentialOwner) {
           const { getCredentialMethods } = await import("./api-credentials.js");
-          const allowedMethods = await getCredentialMethods(credentialName, ctx.triggeredBy);
+          const allowedMethods = await getCredentialMethods(credentialName, credentialOwner);
           if (allowedMethods && allowedMethods.length > 0) {
             const methodUpper = method.toUpperCase();
             if (allowedMethods.map(m => m.toUpperCase()).includes(methodUpper)) {

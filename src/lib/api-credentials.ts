@@ -641,9 +641,9 @@ export async function updateCredentialMethods(
   const cred = rows[0];
   if (!cred) throw new Error("Credential not found");
 
-  const allowed = await hasPermission(cred.ownerId, credentialId, requestingUserId, "write");
+  const allowed = await hasPermission(cred.ownerId, credentialId, requestingUserId, "admin");
   if (!allowed) {
-    throw new Error("Only the owner or a write grantee can update credential permissions");
+    throw new Error("Only the owner or an admin can update credential permissions");
   }
 
   await db

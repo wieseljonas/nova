@@ -237,7 +237,7 @@ async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): 
         value: `api_credential_update_${cred.id}`,
       });
     }
-    if (canWrite) {
+    if (isOwner) {
       overflowOptions.push({
         text: { type: "plain_text", text: "Permissions" },
         value: `api_credential_permissions_${cred.id}`,
@@ -710,7 +710,7 @@ export async function openCredentialPermissionsModal(
   credentialName: string,
   currentMethods: string[] | null,
 ): Promise<void> {
-  const allMethods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+  const allMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
   const selected = (currentMethods ?? []).map(m => m.toUpperCase());
 
   await client.views.open({
