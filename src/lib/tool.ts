@@ -27,6 +27,8 @@ export const executionContext = new AsyncLocalStorage<ExecutionContext>();
 export interface SlackToolMetadata<TInput = any, TOutput = any> {
   /** Spinner label shown while tool is running, e.g. "Searching the web..." */
   status: string;
+  /** Optional title used when a tool is waiting on human approval */
+  approvalStatus?: string | ((input: TInput) => string | undefined);
   /** Extract a short detail from input args for the in-progress card */
   detail?: (input: TInput) => string | undefined;
   /** Extract a short summary from result for the completed card */
@@ -45,6 +47,17 @@ export interface SlackToolMetadata<TInput = any, TOutput = any> {
 export function getSlackMeta(t: unknown): SlackToolMetadata | undefined {
   if (t && typeof t === "object" && "slack" in t) {
     return (t as { slack: SlackToolMetadata }).slack;
+  }
+  return undefined;
+}
+
+/**
+ * Retrieve the user-facing description from a tool definition, if present.
+ */
+export function getToolDescription(t: unknown): string | undefined {
+  if (t && typeof t === "object" && "description" in t) {
+    const description = (t as { description?: unknown }).description;
+    return typeof description === "string" ? description : undefined;
   }
   return undefined;
 }

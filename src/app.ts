@@ -624,62 +624,14 @@ app.post("/api/slack/interactions", async (c) => {
               reactorUserId: userId,
               slackClient,
             });
-            
-            // Update the approval message UI
-            const gaChanId = payload.channel?.id;
-            const gaTs = payload.message?.ts;
-            if (gaChanId && gaTs) {
-              await slackClient.chat.update({
-                channel: gaChanId,
-                ts: gaTs,
-                text: `✅ Approved by <@${userId}> - executing...`,
-                blocks: [{ 
-                  type: "section" as const, 
-                  text: { 
-                    type: "mrkdwn" as const, 
-                    text: `✅ *Approved* by <@${userId}>\n_Executing tool and resuming conversation..._` 
-                  } 
-                }],
-              });
-            }
 
             // HITL: Resume conversation after approval
             const { resumeConversationAfterApproval } = await import("./lib/hitl-resumption.js");
-            const result = await resumeConversationAfterApproval({
+            await resumeConversationAfterApproval({
               actionLogId,
               approvedBy: userId,
               slackClient,
             });
-
-            if (gaChanId && gaTs) {
-              if (result.ok) {
-                await slackClient.chat.update({
-                  channel: gaChanId,
-                  ts: gaTs,
-                  text: `✅ Approved by <@${userId}> - completed`,
-                  blocks: [{ 
-                    type: "section" as const, 
-                    text: { 
-                      type: "mrkdwn" as const, 
-                      text: `✅ *Approved* by <@${userId}>\n✓ Tool executed and conversation resumed` 
-                    } 
-                  }],
-                });
-              } else {
-                await slackClient.chat.update({
-                  channel: gaChanId,
-                  ts: gaTs,
-                  text: `✅ Approved by <@${userId}> - execution failed`,
-                  blocks: [{ 
-                    type: "section" as const, 
-                    text: { 
-                      type: "mrkdwn" as const, 
-                      text: `✅ *Approved* by <@${userId}>\n⚠️ Execution failed: ${result.error || "Unknown error"}` 
-                    } 
-                  }],
-                });
-              }
-            }
           } catch (err) {
             recordError("interactions.governance_approve", err, { userId, actionLogId });
             logger.error("Approval button handler failed", { userId, actionLogId, error: err });
@@ -699,24 +651,6 @@ app.post("/api/slack/interactions", async (c) => {
               reactorUserId: userId,
               slackClient,
             });
-
-            // Update the approval message UI
-            const grChanId = payload.channel?.id;
-            const grTs = payload.message?.ts;
-            if (grChanId && grTs) {
-              await slackClient.chat.update({
-                channel: grChanId,
-                ts: grTs,
-                text: `❌ Rejected by <@${userId}>`,
-                blocks: [{ 
-                  type: "section" as const, 
-                  text: { 
-                    type: "mrkdwn" as const, 
-                    text: `❌ *Rejected* by <@${userId}>\n_Tool will not be executed_` 
-                  } 
-                }],
-              });
-            }
 
             // HITL: Handle rejection
             const { handleToolRejection } = await import("./lib/hitl-resumption.js");
