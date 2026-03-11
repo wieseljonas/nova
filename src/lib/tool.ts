@@ -147,8 +147,15 @@ export function defineTool<TInput, TOutput>(config: {
     description: rest.description,
     inputSchema: rest.inputSchema,
     execute: loggedExecute,
-    // SDK-native approval: check risk tier dynamically
+    // SDK-native approval: only gate http_request for now
     needsApproval: async (input: TInput) => {
+      const toolName = toolRef.name || "unknown";
+
+      // Only http_request needs approval gating -- all other tools pass through
+      if (toolName !== "http_request") {
+        return false;
+      }
+
       const ctx = executionContext.getStore();
       // Auto-approve in headless/job mode (no interactive user)
       if (ctx?.triggerType === "scheduled_job" || ctx?.triggerType === "autonomous") {
@@ -156,23 +163,22 @@ export function defineTool<TInput, TOutput>(config: {
       }
 
       try {
-        const toolName = toolRef.name || "unknown";
         const httpInput = input as Record<string, unknown>;
         const policy = await lookupPolicy({
           toolName,
-          url: toolName === "http_request" ? (httpInput.url as string) : undefined,
-          method: toolName === "http_request" ? (httpInput.method as string) : undefined,
+          url: httpInput.url as string | undefined,
+          method: httpInput.method as string | undefined,
           credentialName: httpInput.credential_name as string | undefined,
         });
         const riskTier = effectiveRiskTier(
           policy,
-          toolName === "http_request" ? (httpInput.method as string) : undefined,
+          httpInput.method as string | undefined,
         );
         // Write and destructive tiers need approval
         return riskTier === "write" || riskTier === "destructive";
       } catch (err) {
         logger.warn("needsApproval: policy lookup failed, failing closed (requiring approval)", {
-          toolName: toolRef.name,
+          toolName,
           error: err,
         });
         return true; // Fail-closed: require approval when policy lookup fails
