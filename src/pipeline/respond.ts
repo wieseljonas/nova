@@ -832,6 +832,12 @@ export async function generateResponse(
                   userId: ctx.triggeredBy,
                   channelType: options.channelType || "channel",
                   messages: streamCallOptions.messages || (streamCallOptions.prompt != null ? [{ role: "user" as const, content: streamCallOptions.prompt }] : []),
+                  // Include the assistant's tool call so the SDK can match the approval response
+                  assistantToolCall: {
+                    toolName: approvalToolName,
+                    toolCallId: approvalToolCallId,
+                    input: approvalInput,
+                  },
                   toolCallId: approvalToolCallId,
                   approvalId,
                   stablePrefix: options.stablePrefix,

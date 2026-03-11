@@ -91,6 +91,21 @@ export async function resumeConversationAfterApproval(args: {
       return { ok: false, error: "Conversation state messages corrupted" };
     }
 
+    if (!state.approvalId || !state.assistantToolCall) {
+      logger.warn("HITL resumption: missing approvalId or assistantToolCall", {
+        actionLogId,
+        hasApprovalId: !!state.approvalId,
+        hasAssistantToolCall: !!state.assistantToolCall,
+      });
+      const { safePostMessage } = await import("./slack-messaging.js");
+      await safePostMessage(slackClient, {
+        channel: state.channelId,
+        thread_ts: state.threadTs,
+        text: "⚠️ This approval was created before the conversation state fix was deployed. Please retry your original request.",
+      });
+      return { ok: false, error: "Missing approvalId or assistantToolCall in conversation state" };
+    }
+
     logger.info("HITL resumption: starting", {
       actionLogId,
       toolName: entry.toolName,
@@ -98,19 +113,42 @@ export async function resumeConversationAfterApproval(args: {
       messageCount: state.messages.length,
     });
 
-    // 2. Build the approval response message
+    // 2. Reconstruct the full message history for SDK replay
+    // The SDK expects: user message -> assistant (with tool call + approval request) -> tool (approval response)
+    // state.messages has the user input; state.assistantToolCall has the tool call details
+    const assistantMessage = (state.assistantToolCall && state.approvalId) ? {
+      role: "assistant" as const,
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: state.toolCallId,
+          toolName: state.assistantToolCall.toolName,
+          input: state.assistantToolCall.input,
+        },
+        {
+          type: "tool-approval-request" as const,
+          toolCallId: state.toolCallId,
+          approvalId: state.approvalId,
+        },
+      ],
+    } : null;
+
     const approvalMessage = {
       role: "tool" as const,
       content: [
         {
           type: "tool-approval-response" as const,
-          toolCallId: state.toolCallId,
+          approvalId: state.approvalId!,
           approved: true,
         },
       ],
     };
 
-    const messages = [...state.messages, approvalMessage];
+    const messages = [
+      ...state.messages,
+      ...(assistantMessage ? [assistantMessage] : []),
+      approvalMessage,
+    ];
 
     // 3. Recreate the agent to get tools, then use generateText with stepCountIs
     // We use generateText directly (not agent.generate) to set a tight step limit
