@@ -561,7 +561,7 @@ export const actionLog = pgTable(
       threadTs?: string;
       userId: string;
       channelType: string;
-      messages: any[]; // Full AI SDK messages for replay on resumption
+      messages: Array<{role: string; content: unknown; [key: string]: unknown}>; // Full AI SDK messages for replay on resumption
       toolCallId: string; // Tool call ID needing approval
       approvalId?: string; // SDK approval ID
       stablePrefix: string;
