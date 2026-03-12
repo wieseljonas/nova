@@ -195,6 +195,36 @@ export function defineTool<TInput, TOutput>(config: {
           }
         }
 
+        // Auto-approve-same-pattern: Check if this exact URL + method was recently approved
+        // If found within the last 5 minutes, auto-approve to support batch-like workflows
+        if (httpInput.url && ctx?.triggeredBy) {
+          const { sql: sqlFn } = await import("drizzle-orm");
+          const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+          
+          const recentApprovals = await db
+            .select()
+            .from(actionLog)
+            .where(
+              sqlFn`${actionLog.toolName} = 'http_request' 
+                AND ${actionLog.status} = 'approved'
+                AND ${actionLog.triggeredBy} = ${ctx.triggeredBy}
+                AND ${actionLog.approvedAt} > ${fiveMinutesAgo}
+                AND ${actionLog.params}->>'url' = ${httpInput.url as string}
+                AND ${actionLog.params}->>'method' = ${method}`
+            )
+            .limit(1);
+
+          if (recentApprovals.length > 0) {
+            logger.info("Auto-approved via same-pattern match", {
+              toolName,
+              url: httpInput.url,
+              method,
+              recentApprovalId: recentApprovals[0].id,
+            });
+            return false;
+          }
+        }
+
         const policy = await lookupPolicy({
           toolName,
           url: httpInput.url as string | undefined,

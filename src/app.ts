@@ -832,6 +832,267 @@ app.post("/api/slack/interactions", async (c) => {
         })();
         waitUntil(viewRawPromise);
       }
+
+      // ── Batch Proposal buttons ─────────────────────────────────────────
+      if (action.action_id?.startsWith("batch_approve_")) {
+        const batchId = action.action_id.replace("batch_approve_", "");
+        
+        const approvePromise = (async () => {
+          try {
+            const { batchProposals } = await import("./db/schema.js");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+            const { executeBatch } = await import("./lib/batch-executor.js");
+
+            // Update batch status to approved
+            await db
+              .update(batchProposals)
+              .set({ status: "approved", approvedBy: userId, approvedAt: new Date() })
+              .where(eq(batchProposals.id, batchId));
+
+            // Execute batch in background
+            const executePromise = executeBatch({
+              batchId,
+              requestingUserId: userId,
+              slackClient,
+            });
+            waitUntil(executePromise);
+
+            logger.info("Batch approved and executing", { batchId, userId });
+          } catch (err) {
+            recordError("interactions.batch_approve", err, { userId, batchId });
+            logger.error("Batch approve failed", { userId, batchId, error: err });
+          }
+        })();
+        waitUntil(approvePromise);
+      }
+
+      if (action.action_id?.startsWith("batch_reject_")) {
+        const batchId = action.action_id.replace("batch_reject_", "");
+        
+        const rejectPromise = (async () => {
+          try {
+            const { batchProposals } = await import("./db/schema.js");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+
+            const [batch] = await db
+              .select()
+              .from(batchProposals)
+              .where(eq(batchProposals.id, batchId))
+              .limit(1);
+
+            if (!batch) return;
+
+            // Update batch status to rejected
+            await db
+              .update(batchProposals)
+              .set({ status: "rejected" })
+              .where(eq(batchProposals.id, batchId));
+
+            // Update Slack card to show rejection
+            if (batch.approvalChannelId && batch.approvalMessageTs) {
+              await slackClient.chat.update({
+                channel: batch.approvalChannelId,
+                ts: batch.approvalMessageTs,
+                text: `❌ Batch rejected by <@${userId}>`,
+                attachments: [
+                  {
+                    color: "#e01e5a",
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `*❌ ~${batch.summaryTitle ?? "Batch operation"}~*`,
+                        },
+                      },
+                      {
+                        type: "context",
+                        elements: [
+                          {
+                            type: "mrkdwn",
+                            text: `Rejected by <@${userId}>`,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              });
+            }
+
+            logger.info("Batch rejected", { batchId, userId });
+          } catch (err) {
+            recordError("interactions.batch_reject", err, { userId, batchId });
+            logger.error("Batch reject failed", { userId, batchId, error: err });
+          }
+        })();
+        waitUntil(rejectPromise);
+      }
+
+      if (action.action_id?.startsWith("batch_review_") && payload.trigger_id) {
+        const batchId = action.action_id.replace("batch_review_", "");
+        
+        const reviewPromise = (async () => {
+          try {
+            const { batchProposals, batchItems } = await import("./db/schema.js");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+
+            const [batch] = await db
+              .select()
+              .from(batchProposals)
+              .where(eq(batchProposals.id, batchId))
+              .limit(1);
+
+            if (!batch) return;
+
+            const items = await db
+              .select()
+              .from(batchItems)
+              .where(eq(batchItems.batchId, batchId))
+              .orderBy(batchItems.index)
+              .limit(50);
+
+            const itemsText = items
+              .map((item) => `${item.index + 1}. \`${item.method} ${item.url}\``)
+              .join("\n");
+
+            const moreText = batch.progressTotal > 50 
+              ? `\n\n...and ${batch.progressTotal - 50} more items (showing first 50)`
+              : "";
+
+            const modal = {
+              type: "modal" as const,
+              title: {
+                type: "plain_text" as const,
+                text: "Batch Details",
+                emoji: true,
+              },
+              close: {
+                type: "plain_text" as const,
+                text: "Close",
+              },
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: batch.summaryTitle ?? "Batch Operation",
+                    emoji: true,
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: batch.summaryDetails || `${batch.progressTotal} HTTP requests`,
+                  },
+                },
+                {
+                  type: "divider",
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*All requests (${batch.progressTotal} total):*\n${itemsText}${moreText}`,
+                  },
+                },
+              ],
+            };
+
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
+          } catch (err) {
+            recordError("interactions.batch_review", err, { userId, batchId });
+            logger.error("Batch review modal failed", { userId, batchId, error: err });
+          }
+        })();
+        waitUntil(reviewPromise);
+      }
+
+      if (action.action_id?.startsWith("batch_view_details_") && payload.trigger_id) {
+        const batchId = action.action_id.replace("batch_view_details_", "");
+        
+        const detailsPromise = (async () => {
+          try {
+            const { batchProposals, batchItems } = await import("./db/schema.js");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+
+            const [batch] = await db
+              .select()
+              .from(batchProposals)
+              .where(eq(batchProposals.id, batchId))
+              .limit(1);
+
+            if (!batch) return;
+
+            const items = await db
+              .select()
+              .from(batchItems)
+              .where(eq(batchItems.batchId, batchId))
+              .orderBy(batchItems.index);
+
+            const successItems = items.filter((i) => i.status === "success");
+            const failedItems = items.filter((i) => i.status === "failed");
+            const pendingItems = items.filter((i) => i.status === "pending");
+
+            const failedText = failedItems.length > 0
+              ? failedItems.slice(0, 10).map((item) => 
+                  `• \`${item.method} ${item.url}\`\n  Error: ${item.error}`
+                ).join("\n") + (failedItems.length > 10 ? `\n...and ${failedItems.length - 10} more failures` : "")
+              : "None";
+
+            const modal = {
+              type: "modal" as const,
+              title: {
+                type: "plain_text" as const,
+                text: "Batch Results",
+                emoji: true,
+              },
+              close: {
+                type: "plain_text" as const,
+                text: "Close",
+              },
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: batch.summaryTitle ?? "Batch Operation",
+                    emoji: true,
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*Status:* \`${batch.status}\`\n*Total:* ${batch.progressTotal} items\n✅ Succeeded: ${successItems.length}\n❌ Failed: ${failedItems.length}\n⏳ Pending: ${pendingItems.length}`,
+                  },
+                },
+                {
+                  type: "divider",
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*Failed requests:*\n${failedText}`,
+                  },
+                },
+              ],
+            };
+
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
+          } catch (err) {
+            recordError("interactions.batch_view_details", err, { userId, batchId });
+            logger.error("Batch view details modal failed", { userId, batchId, error: err });
+          }
+        })();
+        waitUntil(detailsPromise);
+      }
     }
   }
 
