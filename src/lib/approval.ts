@@ -148,51 +148,10 @@ export function effectiveRiskTier(
   return "write";
 }
 
-// ── Tool Parameter Summarization (fallback) ─────────────────────────────────
+// ── Utility ─────────────────────────────────────────────────────────────────
 
 function truncateValue(v: string, max = 200): string {
   return v.length <= max ? v : `${v.slice(0, max)}...`;
-}
-
-function renderScalar(v: unknown): string {
-  if (v == null) return "null";
-  if (typeof v === "string") return v;
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  return truncateValue(JSON.stringify(v), 160);
-}
-
-function summarizeHttpRequest(params: Record<string, unknown>): string {
-  const method = String(params.method ?? "GET").toUpperCase();
-  const url = String(params.url ?? "(missing URL)");
-  const bodyRaw = params.body;
-  const body =
-    typeof bodyRaw === "string"
-      ? bodyRaw
-      : bodyRaw != null
-        ? JSON.stringify(bodyRaw)
-        : "";
-  const bodyLine = body
-    ? `\n*Body (first 200 chars):*\n\`\`\`${truncateValue(body, 200)}\`\`\``
-    : "";
-  return `*Method:* \`${method}\`\n*URL:* ${url}${bodyLine}`;
-}
-
-function summarizeToolParams(toolName: string, params: unknown): string {
-  if (toolName === "http_request" && params && typeof params === "object") {
-    return summarizeHttpRequest(params as Record<string, unknown>);
-  }
-
-  if (!params || typeof params !== "object" || Array.isArray(params)) {
-    return `*Arguments:* \`${renderScalar(params)}\``;
-  }
-
-  const entries = Object.entries(params as Record<string, unknown>).slice(0, 12);
-  if (entries.length === 0) return "*Arguments:* _(none)_";
-
-  const lines = entries.map(([k, v]) => `- *${k}:* \`${truncateValue(renderScalar(v), 180)}\``);
-  const hasMore = Object.keys(params as Record<string, unknown>).length > entries.length;
-  if (hasMore) lines.push("- _...additional fields omitted_");
-  return lines.join("\n");
 }
 
 // ── Risk Tier Colors ────────────────────────────────────────────────────────
@@ -224,11 +183,22 @@ export async function generateApprovalSummary(args: {
     // Look up credential description if we have a credential name
     let credentialDescription: string | undefined;
     if (credentialName) {
+      // Extract credential owner from params (for http_request)
+      const credentialOwner =
+        params && typeof params === "object" && "credential_owner" in params
+          ? (params as any).credential_owner
+          : undefined;
+
+      const whereConditions = credentialOwner
+        ? and(eq(credentials.name, credentialName), eq(credentials.ownerId, credentialOwner))
+        : eq(credentials.name, credentialName);
+
       const credRows = await db
         .select({ description: credentials.description, displayName: credentials.displayName })
         .from(credentials)
-        .where(eq(credentials.name, credentialName))
+        .where(whereConditions)
         .limit(1);
+
       if (credRows[0]?.description) {
         credentialDescription = credRows[0].description;
       } else if (credRows[0]?.displayName) {
@@ -356,6 +326,17 @@ export async function requestApproval(args: {
     .set({ summary })
     .where(eq(actionLog.id, actionLogId));
 
+  // Update job status if this is a scheduled job awaiting approval
+  if (context.jobId) {
+    await db
+      .update(jobs)
+      .set({
+        approvalStatus: "awaiting_approval",
+        pendingActionLogId: actionLogId,
+      })
+      .where(eq(jobs.id, context.jobId));
+  }
+
   const channel = policy?.approvalChannel ?? undefined;
   const approvers = policy?.approverIds ?? [];
   const approverMentions =
@@ -423,8 +404,28 @@ export async function requestApproval(args: {
     },
   ];
 
-  const targetChannel =
+  let targetChannel =
     channel ?? context.channelId ?? process.env.AURA_DEFAULT_CHANNEL;
+
+  // Fall back to DM with triggering user if no channel available
+  if (!targetChannel && logEntry.triggeredBy) {
+    try {
+      const dmResult = await slackClient.conversations.open({
+        users: logEntry.triggeredBy,
+      });
+      targetChannel = dmResult.channel?.id;
+      logger.info("requestApproval: falling back to DM with triggering user", {
+        actionLogId,
+        userId: logEntry.triggeredBy,
+      });
+    } catch (err) {
+      logger.error("requestApproval: failed to open DM", {
+        error: err instanceof Error ? err.message : String(err),
+        actionLogId,
+        userId: logEntry.triggeredBy,
+      });
+    }
+  }
 
   if (!targetChannel) {
     logger.warn("requestApproval: no channel to post approval message to", {
@@ -445,6 +446,12 @@ export async function requestApproval(args: {
           blocks: attachmentBlocks,
         },
       ],
+      metadata: {
+        event_type: "approval_request",
+        event_payload: {
+          action_log_id: actionLogId,
+        },
+      },
     });
 
     const ts = resp.ts ?? "";
