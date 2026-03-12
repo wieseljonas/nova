@@ -214,7 +214,7 @@ export async function executeJob(
     // Phase 2a: persist assistant steps now that generate succeeded
     const conversationSteps: ConversationStep[] = steps.map((step) => ({
       text: step.text,
-      reasoning: (step as any).reasoning,
+      reasoning: Array.isArray((step as any).reasoning) ? (step as any).reasoning : undefined,
       toolCalls: step.toolCalls?.map((tc) => ({
         toolCallId: tc.toolCallId,
         toolName: tc.toolName,
