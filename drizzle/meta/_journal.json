@@ -281,6 +281,13 @@
       "when": 1773600000000,
       "tag": "0039_approval_summary_credential_description",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1773600000001,
+      "tag": "0040_credential_description",
+      "breakpoints": true
     }
   ]
 }
