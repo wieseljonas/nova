@@ -8,6 +8,7 @@ import {
 } from "./context.js";
 import { assemblePrompt } from "./prompt.js";
 import { generateResponse } from "./respond.js";
+import { InvocationSupersededError } from "./prepare-step.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
 import {
   fetchConversationContext,
@@ -15,6 +16,7 @@ import {
   type ConversationContext,
 } from "./slack-context.js";
 import { storeMessage, claimEvent, storeToolCallMessages, storeChannelReadMessage } from "../memory/store.js";
+import { claimInvocation } from "../lib/invocation-lock.js";
 import type { ToolCallRecord } from "./respond.js";
 import { extractMemories } from "../memory/extract.js";
 import {
@@ -187,12 +189,24 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       channelId: context.channelId,
     });
     // Still store the message for long-term memory, but don't respond
-    const storePromise = storeUserMessage(context, event);
-    if (waitUntil) {
-      waitUntil(storePromise);
-    } else {
-      await storePromise;
-    }
+    await scheduleStoreUserMessage(context, event, waitUntil);
+    return;
+  }
+
+  // 2b. Claim invocation lock (enables interruption detection).
+  // Must run after shouldRespond so non-responding messages don't
+  // supersede an in-progress invocation for this thread.
+  const effectiveThreadTs = context.threadTs || context.messageTs;
+  const invocationId = await claimInvocation(context.channelId, effectiveThreadTs, context.messageTs);
+
+  if (!invocationId) {
+    logger.info("Skipping message — a newer message already claimed this thread", {
+      channelId: context.channelId,
+      threadTs: effectiveThreadTs,
+      messageTs: context.messageTs,
+    });
+    // Still store the message for long-term memory, even though we won't respond
+    await scheduleStoreUserMessage(context, event, waitUntil);
     return;
   }
 
@@ -215,7 +229,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
   // - In DMs (top-level): chatStream requires a thread_ts, so we thread
   //   under the user's message. For non-streaming paths (transparency
   //   commands, empty mentions), we still use undefined to reply inline.
-  const replyThreadTs = context.threadTs ?? context.messageTs;
+  const replyThreadTs = context.threadTs || context.messageTs;
 
   try {
     // ── Edge case: empty or near-empty message (but allow image-only) ───
@@ -343,8 +357,19 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       teamId,
       recipientUserId: context.userId,
       channelType: context.channelType,
+      invocationId,
     });
     const llmMs = Date.now() - llmStart;
+
+    if (response.interrupted) {
+      logger.info("Pipeline interrupted — invocation superseded", {
+        channelId: context.channelId,
+      });
+      await pauseSandbox().catch(() => {});
+      // Still store the user's message for long-term memory
+      await scheduleStoreUserMessage(context, event, waitUntil);
+      return;
+    }
 
     // Pause sandbox once after all tool calls are complete for this turn.
     // This avoids the e2b multi-resume bug (e2b-dev/E2B#884) that causes
@@ -422,6 +447,15 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
   } catch (error: any) {
     // Ensure sandbox is paused even on pipeline errors
     await pauseSandbox().catch(() => {});
+
+    if (error instanceof InvocationSupersededError) {
+      logger.info("Pipeline interrupted — invocation superseded", {
+        invocationId: error.invocationId,
+        channelId: context.channelId,
+      });
+      await scheduleStoreUserMessage(context, event, waitUntil);
+      return;
+    }
 
     const errorMessage = error?.message || String(error);
     const errorName = error?.name || "UnknownError";
@@ -516,6 +550,23 @@ async function handleTransparencyCommands(
   }
 
   return false;
+}
+
+/**
+ * Store the user's message, scheduling it as a background task via waitUntil
+ * when available, otherwise awaiting it inline.
+ */
+async function scheduleStoreUserMessage(
+  context: MessageContext,
+  event: SlackEvent,
+  waitUntil?: (promise: Promise<unknown>) => void,
+): Promise<void> {
+  const storePromise = storeUserMessage(context, event);
+  if (waitUntil) {
+    waitUntil(storePromise);
+  } else {
+    await storePromise;
+  }
 }
 
 /**
