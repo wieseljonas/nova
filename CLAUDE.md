@@ -12,6 +12,15 @@ This is a pnpm workspace monorepo. Run `pnpm install` at the root.
 - `apps/web/` — marketing site / blog
 - `content/` — blog posts and Mintlify documentation
 
+## Monorepo structure
+This is a pnpm workspace monorepo. Run `pnpm install` at the root.
+
+- `packages/db/` — shared database package (`@aura/db`): Drizzle schema, migrations, migration runner
+- `apps/api/` — Hono API deployed on Vercel (Slack bot, cron jobs, tools)
+- `apps/dashboard/` — Next.js admin dashboard
+- `apps/web/` — marketing site / blog
+- `content/` — blog posts and Mintlify documentation
+
 ## Tech stack
 - **Runtime:** Vercel serverless functions (Node.js, TypeScript)
 - **Framework:** Hono for HTTP routing (API), Next.js (dashboard)

@@ -17,6 +17,18 @@ This is a **pnpm workspace monorepo**. Always use `pnpm` (not npm/yarn).
 
 **Import schema via `@aura/db/schema`** in both apps. Never copy schema files.
 
+## Monorepo Structure
+
+This is a **pnpm workspace monorepo**. Always use `pnpm` (not npm/yarn).
+
+- `packages/db/` — shared `@aura/db` package (Drizzle schema, migrations, config)
+- `apps/api/` — Hono API on Vercel (Slack bot, cron jobs, AI tools)
+- `apps/dashboard/` — Next.js admin dashboard
+- `apps/web/` — marketing site / blog
+- `content/` — blog posts and Mintlify docs
+
+**Import schema via `@aura/db/schema`** in both apps. Never copy schema files.
+
 ## Platform-First Development -- READ THIS FIRST
 
 Before building anything, **read the platform's documentation and search for existing solutions.** The vast majority of anti-patterns in this codebase came from reimplementing things the platform SDK already provides (Slack's `chatStream` vs manual message polling, E2B's per-command `envs` vs `.bashrc` hacks, Claude Code vs custom agent runner scripts).

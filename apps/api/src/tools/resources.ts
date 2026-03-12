@@ -517,7 +517,7 @@ export function createResourceTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Ingesting resource...", detail: (i) => i.url },
+      slack: { status: "Ingesting resource...", detail: (i) => i.url, output: (r) => r.ok === false ? r.error : `Ingested '${r.title || r.url}'` },
     }),
 
     search_resources: defineTool({
@@ -684,7 +684,7 @@ export function createResourceTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Searching resources...", detail: (i) => i.query },
+      slack: { status: "Searching resources...", detail: (i) => i.query, output: (r) => r.ok === false ? r.error : `${r.count ?? 0} results` },
     }),
 
     get_resource: defineTool({
@@ -754,7 +754,7 @@ export function createResourceTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Loading resource...", detail: (i) => i.url },
+      slack: { status: "Loading resource...", detail: (i) => i.url, output: (r) => r.ok === false ? r.error : 'Resource loaded' },
     }),
 
     list_resources: defineTool({
@@ -828,7 +828,7 @@ export function createResourceTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Listing resources..." },
+      slack: { status: "Listing resources...", output: (r) => r.ok === false ? r.error : `${r.count ?? 0} resources` },
     }),
   };
 }

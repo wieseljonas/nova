@@ -148,6 +148,7 @@ export function createSubagentTools(
       slack: {
         status: "Running subagent...",
         detail: (i) => i.task?.slice(0, 60),
+        output: (r) => r.ok === false ? r.error : `${r.stepCount ?? 0} steps, ${r.toolCallCount ?? 0} tool calls`,
       },
     }),
   };

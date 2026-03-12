@@ -262,7 +262,7 @@ export function createJobTools(
           return { ok: false, error: `Failed to create job: ${error.message}` };
         }
       },
-      slack: { status: "Creating job...", detail: (i) => i.name ?? i.description?.slice(0, 40) },
+      slack: { status: "Creating job...", detail: (i) => i.name ?? i.description?.slice(0, 40), output: (r) => r.ok === false ? r.error : `Created '${r.name || 'job'}'` },
     }),
 
     list_jobs: defineTool({
@@ -331,7 +331,7 @@ export function createJobTools(
           return { ok: false, error: `Failed to list jobs: ${error.message}` };
         }
       },
-      slack: { status: "Listing jobs..." },
+      slack: { status: "Listing jobs...", output: (r) => r.ok === false ? r.error : `${r.count} jobs` },
     }),
 
     cancel_job: defineTool({
@@ -406,7 +406,7 @@ export function createJobTools(
           return { ok: false, error: `Failed to cancel job: ${error.message}` };
         }
       },
-      slack: { status: "Cancelling job..." },
+      slack: { status: "Cancelling job...", output: (r) => r.ok === false ? r.error : 'Job cancelled' },
     }),
 
     dispatch_headless: defineTool({
@@ -517,7 +517,7 @@ export function createJobTools(
           };
         }
       },
-      slack: { status: "Dispatching background task...", detail: (i) => i.name ?? i.task?.slice(0, 40) },
+      slack: { status: "Dispatching background task...", detail: (i) => i.name ?? i.task?.slice(0, 40), output: (r) => r.ok === false ? r.error : `Dispatched '${r.jobName || 'task'}'` },
     }),
 
     read_job_trace: defineTool({
@@ -613,7 +613,7 @@ export function createJobTools(
           };
         }
       },
-      slack: { status: "Reading job trace..." },
+      slack: { status: "Reading job trace...", output: (r) => r.ok === false ? r.error : `${r.executions?.length ?? 0} executions` },
     }),
   };
 }

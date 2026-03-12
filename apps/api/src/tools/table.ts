@@ -238,7 +238,7 @@ export function createTableTools(client: WebClient, context?: ScheduleContext) {
           return { ok: false, error: `Failed to send table: ${err.message}` };
         }
       },
-      slack: { status: "Drawing table..." },
+      slack: { status: "Drawing table...", output: (r) => r.ok !== false ? 'Table rendered' : r.error },
     }),
   };
 }
