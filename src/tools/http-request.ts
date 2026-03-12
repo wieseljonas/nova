@@ -1,7 +1,7 @@
 import dns from "node:dns/promises";
 import { z } from "zod";
 import { defineTool } from "../lib/tool.js";
-import { getApiCredentialWithType, setCredentialDisplayName } from "../lib/api-credentials.js";
+import { getApiCredentialWithType, getCredentialDisplayName } from "../lib/api-credentials.js";
 import { logger } from "../lib/logger.js";
 import type { ScheduleContext } from "../db/schema.js";
 
@@ -16,6 +16,7 @@ function isPrivateIP(ip: string): boolean {
     ip === "::1"
   );
 }
+
 
 export function createHttpRequestTool(context?: ScheduleContext) {
   return {
@@ -39,13 +40,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           .string()
           .optional()
           .describe("Slack user ID of the credential owner"),
-        display_label: z
-          .string()
-          .optional()
-          .describe(
-            "Human-friendly label for this API (e.g. 'Close CRM France'). " +
-            "Always include this when using a credential. It powers the status spinner shown to the user."
-          ),
+
         headers: z
           .record(z.string())
           .optional()
@@ -108,18 +103,6 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                 ok: false as const,
                 error: `Credential "${input.credential_name}" not found or expired`,
               };
-            }
-
-            // Persist display_label on first use (LLM sets it once, reused forever)
-            if (input.display_label && !credResult.displayName) {
-              setCredentialDisplayName(
-                input.credential_name,
-                owner,
-                input.display_label,
-                requestingUserId,
-              ).catch((err) =>
-                logger.warn("Failed to persist display_label", { error: err.message }),
-              );
             }
 
             switch (credResult.authScheme) {
@@ -258,12 +241,10 @@ export function createHttpRequestTool(context?: ScheduleContext) {
         }
       },
       slack: {
-        status: (input) => {
-          if (input.display_label) {
-            return `Using ${input.display_label}`;
-          }
-          if (input.credential_name) {
-            return `Using ${input.credential_name}`;
+        status: async (input) => {
+          if (input.credential_name && input.credential_owner) {
+            const displayName = await getCredentialDisplayName(input.credential_name, input.credential_owner);
+            return displayName ? `Using ${displayName}` : `Using ${input.credential_name}`;
           }
           return "Making HTTP request...";
         },
