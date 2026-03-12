@@ -555,6 +555,7 @@ export const actionLog = pgTable(
     approvedBy: text("approved_by"),
     approvedAt: timestamptz("approved_at"),
     idempotencyKey: text("idempotency_key"),
+    summary: jsonb("summary").$type<{ title: string; body: string }>(),
     // HITL resumption fields
     conversationState: jsonb("conversation_state").$type<{
       channelId: string;
@@ -705,6 +706,7 @@ export const credentials = pgTable(
     keyVersion: integer("key_version").notNull().default(1),
     allowedMethods: text("allowed_methods").array(),
     displayName: text("display_name"),
+    description: text("description"),
     expiresAt: timestamptz("expires_at"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),

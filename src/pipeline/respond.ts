@@ -9,6 +9,7 @@ import { safePostMessage, isChannelTypeNotSupported, isInvalidBlocks, isMsgTooLo
 import { getSlackMeta, getToolDescription, executionContext } from "../lib/tool.js";
 import { createInteractiveAgent } from "../lib/agents.js";
 import { getMainModel, buildCachedSystemMessages } from "../lib/ai.js";
+import { sql } from "drizzle-orm";
 
 // ── Tool I/O Persistence ─────────────────────────────────────────────────────
 // Accumulated during streaming and attached as invisible Slack message metadata
@@ -910,6 +911,24 @@ export async function generateResponse(
               })
               .returning({ id: actionLog.id });
 
+            // Fetch credential description if credential is being used
+            let credentialDescription: string | null = null;
+            const credentialName = (approvalInput as any)?.credential_name;
+            if (credentialName) {
+              try {
+                const { credentials } = await import("../db/schema.js");
+                const credOwner = (approvalInput as any)?.credential_owner ?? ctx.triggeredBy;
+                const credRows = await db
+                  .select({ description: credentials.description })
+                  .from(credentials)
+                  .where(
+                    sql`${credentials.ownerId} = ${credOwner} AND ${credentials.name} = ${credentialName}`,
+                  )
+                  .limit(1);
+                credentialDescription = credRows[0]?.description ?? null;
+              } catch { /* non-critical */ }
+            }
+
             // Post approval buttons
             const approvalMessageInfo = await requestApproval({
               actionLogId: logEntry.id,
@@ -925,6 +944,8 @@ export async function generateResponse(
                 userId: ctx.triggeredBy,
               },
               slackClient,
+              conversationContext: options.conversationContext,
+              credentialDescription,
             });
 
             // Store approval message location

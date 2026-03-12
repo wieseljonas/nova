@@ -1,5 +1,6 @@
 import { WebClient } from "@slack/web-api";
 import { eq, and, isNull, sql } from "drizzle-orm";
+import { generateText } from "ai";
 import { db } from "../db/client.js";
 import {
   actionLog,
@@ -9,6 +10,7 @@ import {
   type ScheduleContext,
 } from "../db/schema.js";
 import { logger } from "./logger.js";
+import { getMainModel } from "./ai.js";
 
 export type { ApprovalPolicy };
 
@@ -184,6 +186,90 @@ function summarizeToolParams(toolName: string, params: unknown): string {
   return lines.join("\n");
 }
 
+// ── LLM Summary Generation ──────────────────────────────────────────────────
+
+/**
+ * Generate a human-readable summary of an approval request using the main LLM.
+ * Returns null on failure (timeout, error) to gracefully fall back to raw params.
+ */
+export async function generateApprovalSummary(args: {
+  toolName: string;
+  params: unknown;
+  conversationContext?: string;
+  credentialDescription?: string | null;
+}): Promise<{ title: string; body: string } | null> {
+  const { toolName, params, conversationContext, credentialDescription } = args;
+
+  try {
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), 3000);
+
+    const paramsStr = typeof params === "object" && params !== null
+      ? JSON.stringify(params, null, 2)
+      : String(params);
+
+    const contextSection = conversationContext
+      ? `\n\n## Conversation Context\n${conversationContext.slice(0, 1000)}`
+      : "";
+
+    const credentialSection = credentialDescription
+      ? `\n\n## Credential Info\n${credentialDescription}`
+      : "";
+
+    const prompt = `You are helping a team member understand what a tool invocation will do.
+
+## Tool Name
+${toolName}
+
+## Parameters
+${paramsStr}${contextSection}${credentialSection}
+
+Generate a compact approval card summary with:
+1. **title**: A one-line description (max 60 chars) of what this action does. Be specific and include key details (e.g., endpoint names, IDs, methods).
+2. **body**: Key details extracted from params (max 3 lines). Include specific values like URLs, IDs, names. No filler text like "please confirm".
+
+Return JSON: { "title": "...", "body": "..." }`;
+
+    const { model } = await getMainModel();
+    const result = await generateText({
+      model,
+      prompt,
+      abortSignal: abortController.signal,
+    });
+
+    clearTimeout(timeout);
+
+    const text = result.text.trim();
+    // Try to parse JSON from the response
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.title && parsed.body) {
+        return {
+          title: String(parsed.title).slice(0, 60),
+          body: String(parsed.body).slice(0, 200),
+        };
+      }
+    }
+
+    logger.warn("generateApprovalSummary: could not parse JSON from LLM response", {
+      toolName,
+      response: text.slice(0, 100),
+    });
+    return null;
+  } catch (error: any) {
+    if (error.name === "AbortError") {
+      logger.warn("generateApprovalSummary: timeout after 3s", { toolName });
+    } else {
+      logger.warn("generateApprovalSummary: failed", {
+        toolName,
+        error: error.message,
+      });
+    }
+    return null;
+  }
+}
+
 // ── Request Approval (post Slack message + write action_log row) ────────────
 
 export async function requestApproval(args: {
@@ -194,8 +280,20 @@ export async function requestApproval(args: {
   policy: ApprovalPolicy | null;
   context: ExecutionContext;
   slackClient?: InstanceType<typeof import("@slack/web-api").WebClient> | null;
+  conversationContext?: string;
+  credentialDescription?: string | null;
 }): Promise<{ ts: string; channelId: string } | null> {
-  const { actionLogId, toolName, params, riskTier, policy, context, slackClient: injectedSlackClient } = args;
+  const { 
+    actionLogId, 
+    toolName, 
+    params, 
+    riskTier, 
+    policy, 
+    context, 
+    slackClient: injectedSlackClient,
+    conversationContext,
+    credentialDescription,
+  } = args;
   const slackClient = injectedSlackClient ?? new WebClient(process.env.SLACK_BOT_TOKEN);
 
   const row = await db
@@ -209,6 +307,22 @@ export async function requestApproval(args: {
     throw new Error(`action_log row ${actionLogId} not found`);
   }
 
+  // Generate LLM summary
+  const summary = await generateApprovalSummary({
+    toolName,
+    params: logEntry.params ?? params,
+    conversationContext,
+    credentialDescription,
+  });
+
+  // Store summary in action_log for later retrieval by modals
+  if (summary) {
+    await db
+      .update(actionLog)
+      .set({ summary })
+      .where(eq(actionLog.id, actionLogId));
+  }
+
   const channel = policy?.approvalChannel ?? undefined;
   const approvers = policy?.approverIds ?? [];
   const approverMentions =
@@ -216,12 +330,55 @@ export async function requestApproval(args: {
       ? approvers.map((id) => `<@${id}>`).join(", ")
       : "admins";
 
+  // Determine border color based on risk tier
+  const borderColor = riskTier === "destructive" ? "#e01e5a" : "#e8912d";
+
+  // Build the card title and body
+  const cardTitle = summary?.title ?? `Approval Required: ${toolName}`;
+  const cardBody = summary?.body ?? summarizeToolParams(toolName, logEntry.params ?? params);
+
+  // Check if user is admin for View raw button
+  const { isAdmin } = await import("./permissions.js");
+  const userIsAdmin = isAdmin(logEntry.triggeredBy);
+
+  const actionElements: any[] = [
+    {
+      type: "button" as const,
+      text: { type: "plain_text" as const, text: "✅ Approve", emoji: true },
+      style: "primary" as const,
+      action_id: `governance_approve_${actionLogId}`,
+      value: actionLogId,
+    },
+    {
+      type: "button" as const,
+      text: { type: "plain_text" as const, text: "❌ Reject", emoji: true },
+      style: "danger" as const,
+      action_id: `governance_reject_${actionLogId}`,
+      value: actionLogId,
+    },
+    {
+      type: "button" as const,
+      text: { type: "plain_text" as const, text: "View more" },
+      action_id: `governance_view_more_${actionLogId}`,
+      value: actionLogId,
+    },
+  ];
+
+  if (userIsAdmin) {
+    actionElements.push({
+      type: "button" as const,
+      text: { type: "plain_text" as const, text: "View raw" },
+      action_id: `governance_view_raw_${actionLogId}`,
+      value: actionLogId,
+    });
+  }
+
   const blocks = [
     {
       type: "header" as const,
       text: {
         type: "plain_text" as const,
-        text: `🔒 Approval Required: ${toolName}`,
+        text: cardTitle,
         emoji: true,
       },
     },
@@ -229,41 +386,19 @@ export async function requestApproval(args: {
       type: "section" as const,
       text: {
         type: "mrkdwn" as const,
-        text: `*Risk tier:* \`${riskTier}\`\n*Requested by:* <@${logEntry.triggeredBy}>\n*Trigger:* ${logEntry.triggerType}${logEntry.jobId ? `\n*Job:* ${logEntry.jobId}` : ""}`,
-      },
-    },
-    {
-      type: "section" as const,
-      text: {
-        type: "mrkdwn" as const,
-        text: `*Request details:*\n${summarizeToolParams(toolName, logEntry.params ?? params)}`,
+        text: cardBody,
       },
     },
     {
       type: "actions" as const,
-      elements: [
-        {
-          type: "button" as const,
-          text: { type: "plain_text" as const, text: "✅ Approve", emoji: true },
-          style: "primary" as const,
-          action_id: `governance_approve_${actionLogId}`,
-          value: actionLogId,
-        },
-        {
-          type: "button" as const,
-          text: { type: "plain_text" as const, text: "❌ Reject", emoji: true },
-          style: "danger" as const,
-          action_id: `governance_reject_${actionLogId}`,
-          value: actionLogId,
-        },
-      ],
+      elements: actionElements,
     },
     {
       type: "context" as const,
       elements: [
         {
           type: "mrkdwn" as const,
-          text: `${approverMentions} • Expires in 10 minutes • \`action_log_id: ${actionLogId}\``,
+          text: `Risk: \`${riskTier}\` • Triggered by: <@${logEntry.triggeredBy}> • ${logEntry.triggerType}`,
         },
       ],
     },
@@ -286,7 +421,12 @@ export async function requestApproval(args: {
     channel: targetChannel,
     ...(context.threadTs ? { thread_ts: context.threadTs } : {}),
     text: `Approval required for ${toolName} (${riskTier})`,
-    blocks,
+    attachments: [
+      {
+        color: borderColor,
+        blocks,
+      },
+    ],
     metadata: {
       event_type: "approval_request",
       event_payload: {
@@ -311,6 +451,7 @@ export async function requestApproval(args: {
     riskTier,
     channel: targetChannel,
     messageTs: result.ts,
+    hasSummary: !!summary,
   });
 
   return result.ts ? { ts: result.ts, channelId: targetChannel } : null;
@@ -404,6 +545,93 @@ export async function handleApprovalReaction(args: {
       reactorUserId,
     });
     return;
+  }
+
+  // Update the approval card to reflect the decision
+  if (entry.approvalMessageTs && entry.approvalChannelId) {
+    try {
+      const summary = entry.summary as { title?: string; body?: string } | null;
+      const cardTitle = summary?.title ?? `Approval Required: ${entry.toolName}`;
+      const cardBody = summary?.body ?? summarizeToolParams(entry.toolName, entry.params);
+      
+      // Check if user is admin for View raw button
+      const { isAdmin } = await import("./permissions.js");
+      const userIsAdmin = isAdmin(entry.triggeredBy);
+
+      const viewButtons: any[] = [
+        {
+          type: "button" as const,
+          text: { type: "plain_text" as const, text: "View more" },
+          action_id: `governance_view_more_${actionLogId}`,
+          value: actionLogId,
+        },
+      ];
+
+      if (userIsAdmin) {
+        viewButtons.push({
+          type: "button" as const,
+          text: { type: "plain_text" as const, text: "View raw" },
+          action_id: `governance_view_raw_${actionLogId}`,
+          value: actionLogId,
+        });
+      }
+
+      const borderColor = isApproved ? "#2eb67d" : "#e01e5a";
+      const statusPrefix = isApproved ? "✓ " : "✗ ";
+      const displayTitle = isApproved ? statusPrefix + cardTitle : `~${cardTitle}~`;
+
+      const blocks = [
+        {
+          type: "header" as const,
+          text: {
+            type: "plain_text" as const,
+            text: displayTitle,
+            emoji: true,
+          },
+        },
+        {
+          type: "section" as const,
+          text: {
+            type: "mrkdwn" as const,
+            text: cardBody,
+          },
+        },
+        {
+          type: "actions" as const,
+          elements: viewButtons,
+        },
+        {
+          type: "context" as const,
+          elements: [
+            {
+              type: "mrkdwn" as const,
+              text: isApproved
+                ? `✅ Approved by <@${reactorUserId}>`
+                : `❌ Rejected by <@${reactorUserId}>`,
+            },
+          ],
+        },
+      ];
+
+      await slackClient.chat.update({
+        channel: entry.approvalChannelId,
+        ts: entry.approvalMessageTs,
+        text: isApproved
+          ? `Approved by <@${reactorUserId}>`
+          : `Rejected by <@${reactorUserId}>`,
+        attachments: [
+          {
+            color: borderColor,
+            blocks,
+          },
+        ],
+      });
+    } catch (updateErr) {
+      logger.warn("Failed to update approval message after decision", {
+        actionLogId,
+        error: updateErr,
+      });
+    }
   }
 
   if (entry.jobId) {

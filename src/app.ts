@@ -634,6 +634,128 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(denyPromise);
       }
 
+      // ── Governance: View more modal ─────────────────────────────────
+      if (action.action_id?.startsWith("governance_view_more_")) {
+        const actionLogId = action.action_id.replace("governance_view_more_", "");
+        const viewMorePromise = (async () => {
+          try {
+            const { actionLog } = await import("./db/schema.js");
+            const rows = await db
+              .select()
+              .from(actionLog)
+              .where(eq(actionLog.id, actionLogId))
+              .limit(1);
+            const logEntry = rows[0];
+            if (!logEntry) return;
+
+            const summary = logEntry.summary as { title?: string; body?: string } | null;
+            const title = summary?.title ?? `${logEntry.toolName} approval request`;
+            const bodyText = summary?.body ?? "No summary available.";
+            const riskTier = logEntry.riskTier;
+            const triggeredBy = logEntry.triggeredBy;
+            const triggerType = logEntry.triggerType;
+
+            const blocks: any[] = [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*What's happening:*\n${bodyText}`,
+                },
+              },
+              { type: "divider" },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*Risk tier:* \`${riskTier}\`\n*Triggered by:* <@${triggeredBy}>\n*Trigger type:* ${triggerType}`,
+                },
+              },
+            ];
+
+            if (payload.trigger_id) {
+              await slackClient.views.open({
+                trigger_id: payload.trigger_id,
+                view: {
+                  type: "modal",
+                  title: { type: "plain_text", text: title.slice(0, 24) },
+                  close: { type: "plain_text", text: "Close" },
+                  blocks,
+                },
+              });
+            }
+          } catch (err) {
+            recordError("interactions.governance_view_more", err, { userId, actionLogId });
+          }
+        })();
+        waitUntil(viewMorePromise);
+      }
+
+      // ── Governance: View raw modal (admin only) ─────────────────────
+      if (action.action_id?.startsWith("governance_view_raw_")) {
+        const actionLogId = action.action_id.replace("governance_view_raw_", "");
+        if (!isAdmin(userId)) continue;
+        const viewRawPromise = (async () => {
+          try {
+            const { actionLog } = await import("./db/schema.js");
+            const rows = await db
+              .select()
+              .from(actionLog)
+              .where(eq(actionLog.id, actionLogId))
+              .limit(1);
+            const logEntry = rows[0];
+            if (!logEntry) return;
+
+            const paramsJson = JSON.stringify(logEntry.params, null, 2);
+            const method = (logEntry.params as any)?.method ?? "GET";
+            const url = (logEntry.params as any)?.url ?? "N/A";
+            const credentialName = logEntry.credentialName ?? "none";
+
+            const blocks: any[] = [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*HTTP Method:* \`${method}\`\n*URL:* ${url}\n*Credential:* \`${credentialName}\``,
+                },
+              },
+              { type: "divider" },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `*Parameters:*\n\`\`\`${paramsJson.slice(0, 2500)}\`\`\``,
+                },
+              },
+              {
+                type: "context",
+                elements: [
+                  {
+                    type: "mrkdwn",
+                    text: `action_log_id: \`${actionLogId}\``,
+                  },
+                ],
+              },
+            ];
+
+            if (payload.trigger_id) {
+              await slackClient.views.open({
+                trigger_id: payload.trigger_id,
+                view: {
+                  type: "modal",
+                  title: { type: "plain_text", text: "Raw Request Data" },
+                  close: { type: "plain_text", text: "Close" },
+                  blocks,
+                },
+              });
+            }
+          } catch (err) {
+            recordError("interactions.governance_view_raw", err, { userId, actionLogId });
+          }
+        })();
+        waitUntil(viewRawPromise);
+      }
+
       // ── Governance approval buttons ─────────────────────────────────
       if (action.action_id?.startsWith("governance_approve_")) {
         const actionLogId = action.action_id.replace("governance_approve_", "");
@@ -822,6 +944,7 @@ function extractCredentialValue(
     if (callbackId === "api_credential_add_submit" && userId) {
       if (!isAdmin(userId)) return c.json({});
       const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
+      const description = payload.view?.state?.values?.cred_description_block?.cred_description?.value;
       const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
       const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
         | "bearer"
@@ -838,7 +961,7 @@ function extractCredentialValue(
         const expiresAt = expiryStr ? new Date(expiryStr) : undefined;
         const addPromise = (async () => {
           try {
-            await storeApiCredential(userId, name, value, expiresAt, authScheme);
+            await storeApiCredential(userId, name, value, expiresAt, authScheme, description);
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_add", err, { userId, name });
@@ -870,6 +993,7 @@ function extractCredentialValue(
 
     if (callbackId === "api_credential_update_submit" && userId) {
       const credentialId = payload.view?.private_metadata;
+      const description = payload.view?.state?.values?.cred_description_block?.cred_description?.value;
       const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
         | "bearer"
         | "basic"
@@ -903,6 +1027,7 @@ function extractCredentialValue(
               value,
               cred.expires_at ?? undefined,
               authScheme,
+              description,
             );
             await publishHomeTab(slackClient, userId);
           } catch (err) {

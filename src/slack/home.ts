@@ -499,6 +499,17 @@ export function buildAddCredentialBlocks(authScheme: AuthScheme = "bearer"): any
         text: "Lowercase, a-z, 0-9, underscores. e.g. airbyte_api_token",
       },
     },
+    {
+      type: "input",
+      block_id: "cred_description_block",
+      label: { type: "plain_text", text: "Description (optional)" },
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_description",
+        placeholder: { type: "plain_text", text: "What this credential is for" },
+      },
+    },
     authSchemeBlock,
     ...valueBlocks,
     {
@@ -519,7 +530,21 @@ export function buildUpdateCredentialBlocks(authScheme: AuthScheme = "bearer"): 
   const authSchemeBlock = buildAuthSchemeBlock(authScheme);
   const valueBlocks = buildCredentialValueBlocks(authScheme);
 
-  return [authSchemeBlock, ...valueBlocks];
+  return [
+    {
+      type: "input",
+      block_id: "cred_description_block",
+      label: { type: "plain_text", text: "Description (optional)" },
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_description",
+        placeholder: { type: "plain_text", text: "What this credential is for" },
+      },
+    },
+    authSchemeBlock,
+    ...valueBlocks,
+  ];
 }
 
 export async function openAddCredentialModal(
