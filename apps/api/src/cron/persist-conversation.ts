@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { conversationTraces, conversationMessages, conversationParts } from "@aura/db/schema";
 import { logger } from "../lib/logger.js";
@@ -223,7 +224,6 @@ export async function updateConversationTraceUsage(
   tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number },
 ): Promise<void> {
   try {
-    const { eq } = await import("drizzle-orm");
     await db
       .update(conversationTraces)
       .set({ tokenUsage })
