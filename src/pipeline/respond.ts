@@ -687,7 +687,7 @@ export async function generateResponse(
 
         case "tool-result": {
           const resultSlackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = (typeof resultSlackMeta?.status === "function" ? resultSlackMeta.status(toolCallInputs.get(chunk.toolCallId) ?? {}) : resultSlackMeta?.status) ?? "Done";
+          const title = (typeof resultSlackMeta?.status === "function" ? await resultSlackMeta.status(toolCallInputs.get(chunk.toolCallId) ?? {}) : resultSlackMeta?.status) ?? "Done";
           const output = chunk.output;
           const isError = output && typeof output === "object" &&
             "ok" in output && output.ok === false;
@@ -749,7 +749,7 @@ export async function generateResponse(
           const errToolName = (chunk as any).toolName;
           const errToolCallId = (chunk as any).toolCallId;
           const errSlackMeta = getSlackMeta(tools[errToolName]);
-          const title = (typeof errSlackMeta?.status === "function" ? errSlackMeta.status(toolCallInputs.get(errToolCallId) ?? {}) : errSlackMeta?.status) ?? "Failed";
+          const title = (typeof errSlackMeta?.status === "function" ? await errSlackMeta.status(toolCallInputs.get(errToolCallId) ?? {}) : errSlackMeta?.status) ?? "Failed";
           const err = (chunk as any).error;
           const errorMsg = err instanceof Error ? err.message : String(err);
           const toolErrorPayload = {
