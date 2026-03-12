@@ -163,6 +163,31 @@ export function supportsEffort(modelId: string): boolean {
 }
 
 /**
+ * Check if a model supports adaptive thinking (`thinking.type: "adaptive"`).
+ * All models that support the `effort` parameter also require adaptive thinking;
+ * sending manual `type: "enabled"` with `budgetTokens` alongside `effort` is invalid.
+ */
+export function supportsAdaptiveThinking(modelId: string): boolean {
+  return /claude-(?:opus-4-[56]|sonnet-4-6)/.test(modelId);
+}
+
+/**
+ * Check if a model supports extended thinking (manual `type: "enabled"` with `budgetTokens`).
+ * Matches Sonnet 4, Sonnet 4.5, Opus 4.5, etc. — but NOT Haiku or non-Claude models.
+ * For models that also support adaptive thinking, `supportsAdaptiveThinking` takes priority.
+ */
+export function supportsThinking(modelId: string): boolean {
+  return /claude-(?:sonnet|opus)-4/.test(modelId);
+}
+
+/**
+ * Check if a model is Anthropic (general check, not thinking-specific).
+ */
+export function isAnthropicModel(modelId: string): boolean {
+  return modelId.includes("anthropic") || modelId.includes("claude");
+}
+
+/**
  * Get the escalation model for automatic model escalation.
  * Used when the default model is struggling — prepareStep can swap to this mid-conversation.
  * Priority: DB setting > env var > default (Opus 4.6)
