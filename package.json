@@ -1,5 +1,5 @@
 {
-  "name": "aura-monorepo",
+  "name": "nova-monorepo",
   "private": true,
   "scripts": {
     "db:generate": "pnpm --filter @aura/db db:generate",
