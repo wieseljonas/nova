@@ -332,17 +332,6 @@ export async function requestApproval(args: {
     .set({ summary })
     .where(eq(actionLog.id, actionLogId));
 
-  // Update job status if this is a scheduled job awaiting approval
-  if (context.jobId) {
-    await db
-      .update(jobs)
-      .set({
-        approvalStatus: "awaiting_approval",
-        pendingActionLogId: actionLogId,
-      })
-      .where(eq(jobs.id, context.jobId));
-  }
-
   const channel = policy?.approvalChannel ?? undefined;
   const approvers = policy?.approverIds ?? [];
   const approverMentions =
@@ -472,6 +461,17 @@ export async function requestApproval(args: {
         approvalChannelId: postedChannel,
       })
       .where(eq(actionLog.id, actionLogId));
+
+    // Update job status only after successful Slack post
+    if (context.jobId) {
+      await db
+        .update(jobs)
+        .set({
+          approvalStatus: "awaiting_approval",
+          pendingActionLogId: actionLogId,
+        })
+        .where(eq(jobs.id, context.jobId));
+    }
 
     logger.info("Approval message posted", {
       actionLogId,

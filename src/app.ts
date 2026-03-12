@@ -759,17 +759,9 @@ app.post("/api/slack/interactions", async (c) => {
         })();
         waitUntil(rejectPromise);
       }
-    }
-  }
 
-  // ── Approval modal buttons (View more / View raw) ─────────────
-  if (payload.type === "block_actions") {
-    const triggerId = payload.trigger_id;
-    const userId = payload.user?.id;
-
-    for (const action of payload.actions ?? []) {
-      // "View more" button — show LLM-generated detailed description
-      if (action.action_id?.startsWith("approval_view_more_") && triggerId) {
+      // ── Approval modal buttons (View more / View raw) ─────────────
+      if (action.action_id?.startsWith("approval_view_more_") && payload.trigger_id) {
         const actionLogId = action.action_id.replace("approval_view_more_", "");
         const viewMorePromise = (async () => {
           try {
@@ -793,7 +785,7 @@ app.post("/api/slack/interactions", async (c) => {
               status: entry.status,
             });
 
-            await slackClient.views.open({ trigger_id: triggerId, view: modal });
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
           } catch (err) {
             recordError("interactions.approval_view_more", err, { userId, actionLogId });
             logger.error("View more modal failed", { userId, actionLogId, error: err });
@@ -802,8 +794,7 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(viewMorePromise);
       }
 
-      // "View raw" button — show raw JSON params (admin only)
-      if (action.action_id?.startsWith("approval_view_raw_") && triggerId && userId) {
+      if (action.action_id?.startsWith("approval_view_raw_") && payload.trigger_id && userId) {
         const actionLogId = action.action_id.replace("approval_view_raw_", "");
         const viewRawPromise = (async () => {
           try {
@@ -833,7 +824,7 @@ app.post("/api/slack/interactions", async (c) => {
               credentialName: entry.credentialName,
             });
 
-            await slackClient.views.open({ trigger_id: triggerId, view: modal });
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
           } catch (err) {
             recordError("interactions.approval_view_raw", err, { userId, actionLogId });
             logger.error("View raw modal failed", { userId, actionLogId, error: err });
@@ -844,7 +835,7 @@ app.post("/api/slack/interactions", async (c) => {
     }
   }
 
-    if (payload.type === "view_submission") {
+  if (payload.type === "view_submission") {
     const callbackId = payload.view?.callback_id;
     const userId = payload.user?.id;
 
