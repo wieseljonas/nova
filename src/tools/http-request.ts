@@ -44,7 +44,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           .optional()
           .describe(
             "Human-friendly label for this API (e.g. 'Close CRM France'). " +
-            "Set this the first time you use a credential -- it gets stored and reused automatically."
+            "Always include this when using a credential. It powers the status spinner shown to the user."
           ),
         headers: z
           .record(z.string())
@@ -116,6 +116,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                 input.credential_name,
                 owner,
                 input.display_label,
+                requestingUserId,
               ).catch((err) =>
                 logger.warn("Failed to persist display_label", { error: err.message }),
               );

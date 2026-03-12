@@ -618,8 +618,11 @@ export async function setCredentialDisplayName(
   name: string,
   ownerId: string,
   displayName: string,
+  requestingUserId?: string,
 ): Promise<void> {
   validateName(name);
+  // Only the credential owner can set display name
+  if (requestingUserId && requestingUserId !== ownerId) return;
   await db
     .update(credentials)
     .set({ displayName, updatedAt: new Date() })
