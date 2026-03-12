@@ -4,11 +4,11 @@ import { db } from "@/lib/db";
 import {
   conversationTraces,
   conversationMessages,
-  conversationParts,
   jobs,
   jobExecutions,
 } from "@schema";
-import { eq, desc, asc, sql, and, type SQL } from "drizzle-orm";
+import { eq, desc, sql, and, type SQL } from "drizzle-orm";
+import { fetchConversationWithParts } from "@/lib/queries";
 
 export async function getConversations(
   sourceType?: string,
@@ -111,26 +111,7 @@ export async function getConversation(id: string) {
     .where(eq(conversationTraces.id, id));
   if (!trace) return null;
 
-  const msgs = await db
-    .select()
-    .from(conversationMessages)
-    .where(eq(conversationMessages.conversationId, trace.id))
-    .orderBy(asc(conversationMessages.orderIndex));
-
-  const msgIds = msgs.map((m) => m.id);
-  let parts: (typeof conversationParts.$inferSelect)[] = [];
-  if (msgIds.length > 0) {
-    parts = await db
-      .select()
-      .from(conversationParts)
-      .where(sql`${conversationParts.messageId} IN ${msgIds}`)
-      .orderBy(asc(conversationParts.orderIndex));
-  }
-
-  const conversation = msgs.map((msg) => ({
-    ...msg,
-    parts: parts.filter((p) => p.messageId === msg.id),
-  }));
+  const conversation = await fetchConversationWithParts(trace.id);
 
   let jobName: string | null = null;
   let jobId: string | null = null;

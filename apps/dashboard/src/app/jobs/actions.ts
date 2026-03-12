@@ -1,8 +1,9 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { jobs, jobExecutions, conversationTraces, conversationMessages, conversationParts } from "@schema";
-import { eq, desc, asc, ilike, sql } from "drizzle-orm";
+import { jobs, jobExecutions, conversationTraces } from "@schema";
+import { eq, desc, ilike, sql } from "drizzle-orm";
+import { fetchConversationWithParts } from "@/lib/queries";
 import { revalidatePath } from "next/cache";
 
 export async function getJobs(search?: string, page = 1, limit = 100) {
@@ -60,26 +61,7 @@ export async function getExecutionWithConversation(execId: string) {
 
   if (!trace) return { execution: exec, conversation: [], conversationTraceId: null };
 
-  const msgs = await db
-    .select()
-    .from(conversationMessages)
-    .where(eq(conversationMessages.conversationId, trace.id))
-    .orderBy(asc(conversationMessages.orderIndex));
-
-  const msgIds = msgs.map((m) => m.id);
-  let parts: (typeof conversationParts.$inferSelect)[] = [];
-  if (msgIds.length > 0) {
-    parts = await db
-      .select()
-      .from(conversationParts)
-      .where(sql`${conversationParts.messageId} IN ${msgIds}`)
-      .orderBy(asc(conversationParts.orderIndex));
-  }
-
-  const conversation = msgs.map((msg) => ({
-    ...msg,
-    parts: parts.filter((p) => p.messageId === msg.id),
-  }));
+  const conversation = await fetchConversationWithParts(trace.id);
 
   return { execution: exec, conversation, conversationTraceId: trace.id };
 }
