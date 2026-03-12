@@ -17,9 +17,15 @@ interface ToolResult {
   output: unknown;
 }
 
+interface ReasoningPart {
+  type: "reasoning";
+  text: string;
+  providerMetadata?: Record<string, unknown>;
+}
+
 export interface Step {
   text: string;
-  reasoning?: string;
+  reasoning?: ReasoningPart[];
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   finishReason?: string;
@@ -105,8 +111,8 @@ function stepToParts(step: Step): PartRow[] {
 
   parts.push({ type: "step-start", orderIndex: idx++ });
 
-  if (step.reasoning) {
-    parts.push({ type: "reasoning", orderIndex: idx++, textValue: step.reasoning });
+  if (step.reasoning?.length) {
+    parts.push({ type: "reasoning", orderIndex: idx++, textValue: step.reasoning.map((r) => r.text).join('\n\n') });
   }
 
   if (step.toolCalls && step.toolCalls.length > 0) {

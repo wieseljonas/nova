@@ -668,7 +668,7 @@ async function runBackgroundTasks(params: {
             const rawSteps = await stepsPromise;
             const conversationSteps: ConversationStep[] = rawSteps.map((step: any) => ({
               text: step.text,
-              reasoning: step.reasoning,
+              reasoning: Array.isArray(step.reasoning) ? step.reasoning : undefined,
               toolCalls: step.toolCalls?.map((tc: any) => ({
                 toolCallId: tc.toolCallId,
                 toolName: tc.toolName,
