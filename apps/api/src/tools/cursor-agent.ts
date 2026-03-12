@@ -17,7 +17,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
   return {
     dispatch_cursor_agent: defineTool({
       description:
-        "Dispatch an async Cursor Cloud Agent to work on a code task in the Aura repo. " +
+        "Dispatch an async Cursor Cloud Agent to work on a code task in the Nova repo. " +
         "Use for complex multi-file changes that would take >5 minutes in the sandbox (refactors, new features, multi-step bug fixes). " +
         "Do NOT use for simple one-line fixes or tasks that run_command handles in <2 minutes. " +
         "The agent runs in the background (3-30 min), creates a branch, makes changes, opens a PR, and results arrive via webhook DM. " +
@@ -91,7 +91,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
 
           const isAuraRepo = repo === DEFAULT_REPO;
           const repoDescription = isAuraRepo
-            ? `This is the Aura project (github.com/${repo}) — a Slack AI assistant built with TypeScript, Hono, Vercel serverless, AI SDK v6, and PostgreSQL.`
+            ? `This is the Nova project (github.com/${repo}) — a Slack AI assistant built with TypeScript, Hono, Vercel serverless, AI SDK v6, and PostgreSQL.`
             : `Repository: github.com/${repo}`;
 
           const instructions = isAuraRepo

@@ -13,7 +13,7 @@ import { embedText } from "../lib/embeddings.js";
  */
 
 /**
- * Get everything Aura knows about a user — their profile and all memories
+ * Get everything Nova knows about a user — their profile and all memories
  * where they appear in relatedUserIds.
  */
 export async function getKnowledgeAboutUser(

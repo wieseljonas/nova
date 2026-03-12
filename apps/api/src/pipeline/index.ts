@@ -223,7 +223,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     }
 
     // Set assistant thread status — triggers the shimmer animation on
-    // Aura's name and shows a loading indicator while processing.
+    // Nova's name and shows a loading indicator while processing.
     // Requires the `assistant:write` scope (enabled via Agents & AI Apps
     // toggle in Slack app settings). Status auto-clears on reply.
     try {
@@ -566,7 +566,7 @@ async function runBackgroundTasks(params: {
       metadata: buildMessageMetadata(event),
     });
 
-    // Store Aura's response with a pseudo-timestamp
+    // Store Nova's response with a pseudo-timestamp
     const assistantTs = `${context.messageTs}-aura`;
     await storeMessage({
       slackTs: assistantTs,

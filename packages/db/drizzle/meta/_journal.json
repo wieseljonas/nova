@@ -260,6 +260,41 @@
       "when": 1773571200000,
       "tag": "0036_add_message_model",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1773400000000,
+      "tag": "0037_credential_auth_scheme",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1773400001000,
+      "tag": "0038_google_service_account_auth_scheme",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1773400002000,
+      "tag": "0039_add_hitl_resumption_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1773400003000,
+      "tag": "0040_credential_allowed_methods",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1773400004000,
+      "tag": "0041_credential_display_name",
+      "breakpoints": true
     }
   ]
 }

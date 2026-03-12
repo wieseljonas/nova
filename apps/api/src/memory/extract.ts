@@ -148,7 +148,7 @@ const extractedMemoriesSchema = z.object({
       shareable: z
         .boolean()
         .describe(
-          "True only if the user explicitly asked Aura to share this info with someone specific",
+          "True only if the user explicitly asked Nova to share this info with someone specific",
         )
         .default(false),
     }),
@@ -173,8 +173,8 @@ Types of memories to extract:
 Rules:
 - Be concise — each memory should be one clear sentence.
 - Include the person's name or Slack user ID when relevant.
-- Don't extract things Aura already knows (if they're in the context).
-- If the user explicitly asks Aura to tell someone something, mark that memory as shareable.
+- Don't extract things Nova already knows (if they're in the context).
+- If the user explicitly asks Nova to tell someone something, mark that memory as shareable.
 - Return an empty array if there's nothing worth remembering.`;
 
 interface ExtractionContext {

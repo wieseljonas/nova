@@ -287,7 +287,7 @@ export function createResourceTools(context?: ScheduleContext) {
           .string()
           .optional()
           .describe(
-            "Optional pre-extracted markdown content. Provide this for binaries or non-HTTP URLs; if omitted, Aura fetches the URL and converts it to markdown.",
+            "Optional pre-extracted markdown content. Provide this for binaries or non-HTTP URLs; if omitted, Nova fetches the URL and converts it to markdown.",
           ),
         use_tavily: z
           .boolean()

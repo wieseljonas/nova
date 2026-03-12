@@ -1,6 +1,6 @@
-# Aura
+# Nova
 
-Aura is an AI team member that lives in Slack -- a persistent, autonomous colleague with memory, judgment, and the ability to act.
+Nova is an AI team member (forked from Aura) that lives in Slack -- a persistent, autonomous colleague with memory, judgment, and the ability to act.
 
 She reads context, remembers every conversation, initiates work without being asked, and gets smarter over time. She has persistent memory, a self-improvement loop, and the ability to act autonomously: file issues, make phone calls, send emails, query data warehouses, run code, dispatch coding agents, and more -- all without leaving your workspace.
 
@@ -38,7 +38,7 @@ Built with TypeScript, Hono, Vercel serverless functions, Vercel AI SDK v6, and 
 
 **Memory** — After every exchange, facts, decisions, and open threads are extracted, embedded, and stored. Semantic search over all past conversations.
 
-**Jobs** — Scheduled and recurring tasks with cron execution, playbooks, and retry logic. Aura creates jobs for herself when she spots recurring work.
+**Jobs** — Scheduled and recurring tasks with cron execution, playbooks, and retry logic. Nova creates jobs for itself when she spots recurring work.
 
 ---
 
@@ -123,12 +123,12 @@ Each integration degrades gracefully if unconfigured — missing keys disable fe
 
 ## Troubleshooting
 
-**Aura doesn't respond to DMs**
+**Nova doesn't respond to DMs**
 - Check that `im:history` and `im:read` scopes are added and `message.im` event subscription is enabled
 - Verify `AURA_BOT_USER_ID` matches the bot's actual Slack user ID
 
-**Aura doesn't respond to @mentions**
-- Invite Aura to the channel first (`/invite @Aura`)
+**Nova doesn't respond to @mentions**
+- Invite Nova to the channel first (`/invite @Nova`)
 - Check that `app_mention` event subscription is enabled
 
 **LLM calls fail**

@@ -68,9 +68,9 @@ export interface MessageContext {
   messageTs: string;
   /** Whether this is a DM */
   isDm: boolean;
-  /** Whether Aura was explicitly mentioned (@Aura) */
+  /** Whether Nova was explicitly mentioned (@Nova) */
   isMentioned: boolean;
-  /** Whether Aura was addressed by name */
+  /** Whether Nova was addressed by name */
   isAddressedByName: boolean;
   /** When set, this message is a Slackbot notification about a Slack List item */
   slackListItemContext?: SlackListItemContext;
@@ -131,11 +131,11 @@ export function buildMessageContext(
   // Determine channel type
   const channelType = resolveChannelType(event);
 
-  // Check if Aura was mentioned
+  // Check if Nova was mentioned
   const mentionPattern = new RegExp(`<@${botUserId}>`, "g");
   const isMentioned = mentionPattern.test(text);
 
-  // Check if addressed by name (case-insensitive "Aura" at start or "Aura," anywhere)
+  // Check if addressed by name (case-insensitive "Nova" at start or "Nova," anywhere)
   const isAddressedByName = /\baura[,:]?\s/i.test(text) || /\baura[?!.]?\s*$/i.test(text);
 
   // Strip the @mention from the text
@@ -170,23 +170,23 @@ export interface ShouldRespondResult {
 
 
 /**
- * Determine if Aura should respond to this message (Tiers 2–4).
+ * Determine if Nova should respond to this message (Tiers 2–4).
  *
  * Tier 1 (DMs, explicit @mention, addressed by name) is handled inline
  * by the pipeline before this function is called — see `runPipeline` in
  * `index.ts`. This function is only invoked when Tier 1 did NOT match.
  *
  * Tiers handled here:
- * 2. LLM gate: Aura is a thread participant or it's her thread (fail-open)
- * 3. LLM gate: Aura posted recently in the channel (fail-closed)
- * 4. Cold observation: Aura monitors but hasn't been active (fail-closed, high bar)
+ * 2. LLM gate: Nova is a thread participant or it's Nova's thread (fail-open)
+ * 3. LLM gate: Nova posted recently in the channel (fail-closed)
+ * 4. Cold observation: Nova monitors but hasn't been active (fail-closed, high bar)
  */
 export async function shouldRespond(
   context: MessageContext,
   conversation: ConversationContext,
   alwaysProcessChannels: Set<string>,
 ): Promise<ShouldRespondResult> {
-  // Tier 2: Aura is a thread participant or it's her thread
+  // Tier 2: Nova is a thread participant or it's Nova's thread
   if (conversation.isAuraParticipant || conversation.isAuraThread) {
     const shouldReply = await llmShouldRespond(context, conversation, true);
     return {
@@ -195,7 +195,7 @@ export async function shouldRespond(
     };
   }
 
-  // Tier 3: Aura posted recently in the channel (non-threaded)
+  // Tier 3: Nova posted recently in the channel (non-threaded)
   if (conversation.auraRecentlyActive) {
     const shouldReply = await llmShouldRespond(context, conversation, false);
     return {
@@ -209,7 +209,7 @@ export async function shouldRespond(
     return { respond: true, reason: "always_process_channel" };
   }
 
-  // Tier 4: Cold observation — Aura is in the channel but hasn't been active.
+  // Tier 4: Cold observation — Nova is in the channel but hasn't been active.
   // Use a conservative LLM gate (fail-closed, high bar).
   const shouldReply = await llmShouldRespond(context, conversation, false, true);
   return {
@@ -220,53 +220,53 @@ export async function shouldRespond(
 
 // ── LLM Gate ─────────────────────────────────────────────────────────────────
 
-const SHOULD_RESPOND_PROMPT_PARTICIPANT = `You are deciding whether Aura (a Slack bot and team assistant) should respond to the latest message.
+const SHOULD_RESPOND_PROMPT_PARTICIPANT = `You are deciding whether Nova (a Slack bot and team assistant) should respond to the latest message.
 
-Aura is already a participant in this conversation (she has sent messages before).
+Nova is already a participant in this conversation (it has sent messages before).
 
 Rules:
-- Answer RESPOND if the message asks a question, requests an action, continues a conversation that needs Aura's input, shares information Aura should acknowledge, or is clearly directed at Aura.
+- Answer RESPOND if the message asks a question, requests an action, continues a conversation that needs Nova's input, shares information Nova should acknowledge, or is clearly directed at Nova.
 - Answer SKIP if the message is just an acknowledgment (thanks, ok, got it, thumbs up), is directed at someone else, or is something where responding would add nothing.
 - When in doubt, lean toward RESPOND — it's better to be helpful than to ignore someone.
 
 Answer with a single word: RESPOND or SKIP.`;
 
-const SHOULD_RESPOND_PROMPT_RECENTLY_ACTIVE = `You are deciding whether Aura (a Slack bot and team assistant) should respond to the latest message.
+const SHOULD_RESPOND_PROMPT_RECENTLY_ACTIVE = `You are deciding whether Nova (a Slack bot and team assistant) should respond to the latest message.
 
-Aura has been active in this channel recently, but is NOT necessarily a participant in this specific conversation or thread.
+Nova has been active in this channel recently, but is NOT necessarily a participant in this specific conversation or thread.
 
 Rules:
-- Answer RESPOND if the message asks a question, requests an action, shares information Aura should acknowledge, or is clearly directed at Aura.
-- Answer SKIP if the message is just an acknowledgment (thanks, ok, got it, thumbs up), is directed at someone else, is part of an ongoing conversation between other people that Aura is not involved in, or is something where responding would add nothing.
-- When in doubt, lean toward SKIP — Aura should not intrude on conversations she's not part of.
+- Answer RESPOND if the message asks a question, requests an action, shares information Nova should acknowledge, or is clearly directed at Nova.
+- Answer SKIP if the message is just an acknowledgment (thanks, ok, got it, thumbs up), is directed at someone else, is part of an ongoing conversation between other people that Nova is not involved in, or is something where responding would add nothing.
+- When in doubt, lean toward SKIP — Nova should not intrude on conversations it's not part of.
 
 Answer with a single word: RESPOND or SKIP.`;
 
-const SHOULD_RESPOND_PROMPT_COLD_OBSERVATION = `You are deciding whether Aura (a Slack bot and team assistant) should respond to this message in a channel she monitors but hasn't recently participated in.
+const SHOULD_RESPOND_PROMPT_COLD_OBSERVATION = `You are deciding whether Nova (a Slack bot and team assistant) should respond to this message in a channel it monitors but hasn't recently participated in.
 
-This is COLD observation — Aura is passively watching. The bar to respond is HIGH.
+This is COLD observation — Nova is passively watching. The bar to respond is HIGH.
 
 Answer RESPOND only if:
 - Someone is reporting a bug, error, or something broken
 - There's an urgent issue that needs immediate attention
-- Someone is explicitly asking a question Aura could answer (data, metrics, status)
-- The message directly relates to Aura's active work (bug triage, OKRs, team ops)
+- Someone is explicitly asking a question Nova could answer (data, metrics, status)
+- The message directly relates to Nova's active work (bug triage, OKRs, team ops)
 
 Answer SKIP for:
 - General conversation, banter, casual chat
 - Messages directed at specific people
 - Status updates that don't need a response
-- Anything where Aura jumping in uninvited would be annoying
+- Anything where Nova jumping in uninvited would be annoying
 
 When in doubt, SKIP. Being quiet is better than being noisy.
 
 Answer with a single word: RESPOND or SKIP.`;
 
 /**
- * Ask the fast model (Haiku) whether Aura should respond to a message.
+ * Ask the fast model (Haiku) whether Nova should respond to a message.
  *
- * @param isParticipant - true if Aura is a direct participant in this thread/conversation (Tier 2),
- *   false if she's only recently active in the channel (Tier 3) or cold-observing (Tier 4).
+ * @param isParticipant - true if Nova is a direct participant in this thread/conversation (Tier 2),
+ *   false if it's only recently active in the channel (Tier 3) or cold-observing (Tier 4).
  * @param coldObservation - true for Tier 4 cold observation (highest bar, most conservative).
  *
  * Returns true if the model says RESPOND, false if SKIP.
@@ -301,7 +301,7 @@ async function llmShouldRespond(
         ? SHOULD_RESPOND_PROMPT_PARTICIPANT
         : SHOULD_RESPOND_PROMPT_RECENTLY_ACTIVE;
 
-    const userMessage = `Recent conversation:\n${conversationText}\n\nLatest message from ${senderName}:\n${context.text}\n\nShould Aura respond?`;
+    const userMessage = `Recent conversation:\n${conversationText}\n\nLatest message from ${senderName}:\n${context.text}\n\nShould Nova respond?`;
 
     const model = await getFastModel();
     const result = await generateText({

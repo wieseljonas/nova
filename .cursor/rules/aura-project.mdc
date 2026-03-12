@@ -1,9 +1,9 @@
 ---
-description: Core conventions for the Aura project -- deployment, env vars, Slack app, and coding patterns.
+description: Core conventions for the Nova project -- deployment, env vars, Slack app, and coding patterns.
 alwaysApply: true
 ---
 
-# Aura Project Conventions
+# Nova Project Conventions
 
 ## Monorepo Structure
 
@@ -70,7 +70,7 @@ Before building anything, **read the platform's documentation and search for exi
 
 ## Slack App
 
-- **Slack app name**: Aura
+- **Slack app name**: Nova
 - **Bot token env var**: `SLACK_BOT_TOKEN` (xoxb-...)
 - **User token env var**: `SLACK_USER_TOKEN` (xoxp-...) -- for message search
 - **Admin user IDs**: `AURA_ADMIN_USER_IDS` (comma-separated)
@@ -113,7 +113,7 @@ Before building anything, **read the platform's documentation and search for exi
 
 - `GITHUB_TOKEN` is a PAT scoped to `realadvisor/aura` (contents + PRs)
 - Passed to E2B sandbox via `envs` for git/gh CLI operations
-- Aura can read her own code via `read_own_source` tool (GitHub API, no sandbox needed)
+- Nova can read her own code via `read_own_source` tool (GitHub API, no sandbox needed)
 - **NEVER push to `main`** -- always create a feature branch and open a PR (see Deployment section)
 - For self-edits to `system-prompt.ts`, flag as "self-edit" in the PR
 

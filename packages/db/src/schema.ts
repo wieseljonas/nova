@@ -557,6 +557,26 @@ export const actionLog = pgTable(
     approvedBy: text("approved_by"),
     approvedAt: timestamptz("approved_at"),
     idempotencyKey: text("idempotency_key"),
+    // HITL resumption fields
+    conversationState: jsonb("conversation_state").$type<{
+      channelId: string;
+      threadTs?: string;
+      userId: string;
+      channelType: string;
+      messages: Array<{role: string; content: unknown; [key: string]: unknown}>; // Full AI SDK messages for replay on resumption
+      toolCallId: string; // Tool call ID needing approval
+      approvalId?: string; // SDK approval ID
+      assistantToolCall?: { toolName: string; toolCallId: string; input: unknown }; // The tool call that triggered approval
+      stablePrefix: string;
+      conversationContext: string;
+      dynamicContext?: string;
+      files?: any[];
+      teamId?: string;
+      timezone?: string;
+      modelId?: string;
+    }>(),
+    approvalMessageTs: text("approval_message_ts"),
+    approvalChannelId: text("approval_channel_id"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (table) => [
@@ -682,11 +702,12 @@ export const credentials = pgTable(
       .default(sql`gen_random_uuid()`),
     ownerId: text("owner_id").notNull(),
     name: text("name").notNull(),
-    type: text("type").notNull().default("token"),
-    tokenUrl: text("token_url"),
+    authScheme: text("auth_scheme").notNull().default("bearer"),
     value: text("value").notNull(),
     keyVersion: integer("key_version").notNull().default(1),
     sandboxEnvName: text("sandbox_env_name"),
+    allowedMethods: text("allowed_methods").array(),
+    displayName: text("display_name"),
     expiresAt: timestamptz("expires_at"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),
@@ -698,8 +719,8 @@ export const credentials = pgTable(
       sql`${table.name} ~ '^[a-z][a-z0-9_]{1,62}$'`,
     ),
     check(
-      "credentials_type_check",
-      sql`${table.type} IN ('token', 'oauth_client')`,
+      "credentials_auth_scheme_check",
+      sql`${table.authScheme} IN ('bearer', 'basic', 'header', 'query', 'oauth_client', 'google_service_account')`,
     ),
   ],
 );

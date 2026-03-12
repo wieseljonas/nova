@@ -139,6 +139,51 @@ export function effectiveRiskTier(
   return "write";
 }
 
+function truncateValue(v: string, max = 200): string {
+  return v.length <= max ? v : `${v.slice(0, max)}...`;
+}
+
+function renderScalar(v: unknown): string {
+  if (v == null) return "null";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return truncateValue(JSON.stringify(v), 160);
+}
+
+function summarizeHttpRequest(params: Record<string, unknown>): string {
+  const method = String(params.method ?? "GET").toUpperCase();
+  const url = String(params.url ?? "(missing URL)");
+  const bodyRaw = params.body;
+  const body =
+    typeof bodyRaw === "string"
+      ? bodyRaw
+      : bodyRaw != null
+        ? JSON.stringify(bodyRaw)
+        : "";
+  const bodyLine = body
+    ? `\n*Body (first 200 chars):*\n\`\`\`${truncateValue(body, 200)}\`\`\``
+    : "";
+  return `*Method:* \`${method}\`\n*URL:* ${url}${bodyLine}`;
+}
+
+function summarizeToolParams(toolName: string, params: unknown): string {
+  if (toolName === "http_request" && params && typeof params === "object") {
+    return summarizeHttpRequest(params as Record<string, unknown>);
+  }
+
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return `*Arguments:* \`${renderScalar(params)}\``;
+  }
+
+  const entries = Object.entries(params as Record<string, unknown>).slice(0, 12);
+  if (entries.length === 0) return "*Arguments:* _(none)_";
+
+  const lines = entries.map(([k, v]) => `- *${k}:* \`${truncateValue(renderScalar(v), 180)}\``);
+  const hasMore = Object.keys(params as Record<string, unknown>).length > entries.length;
+  if (hasMore) lines.push("- _...additional fields omitted_");
+  return lines.join("\n");
+}
+
 // ── Request Approval (post Slack message + write action_log row) ────────────
 
 export async function requestApproval(args: {
@@ -149,7 +194,7 @@ export async function requestApproval(args: {
   policy: ApprovalPolicy | null;
   context: ExecutionContext;
   slackClient?: InstanceType<typeof import("@slack/web-api").WebClient> | null;
-}): Promise<void> {
+}): Promise<{ ts: string; channelId: string } | null> {
   const { actionLogId, toolName, params, riskTier, policy, context, slackClient: injectedSlackClient } = args;
   const slackClient = injectedSlackClient ?? new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -171,12 +216,6 @@ export async function requestApproval(args: {
       ? approvers.map((id) => `<@${id}>`).join(", ")
       : "admins";
 
-  const paramsSummary = JSON.stringify(logEntry.params, null, 2);
-  const truncatedParams =
-    paramsSummary.length > 2800
-      ? paramsSummary.slice(0, 2800) + "\n... (truncated)"
-      : paramsSummary;
-
   const blocks = [
     {
       type: "header" as const,
@@ -197,7 +236,7 @@ export async function requestApproval(args: {
       type: "section" as const,
       text: {
         type: "mrkdwn" as const,
-        text: `*Parameters:*\n\`\`\`${truncatedParams}\`\`\``,
+        text: `*Request details:*\n${summarizeToolParams(toolName, logEntry.params ?? params)}`,
       },
     },
     {
@@ -224,7 +263,7 @@ export async function requestApproval(args: {
       elements: [
         {
           type: "mrkdwn" as const,
-          text: `${approverMentions} • \`action_log_id: ${actionLogId}\``,
+          text: `${approverMentions} • Expires in 10 minutes • \`action_log_id: ${actionLogId}\``,
         },
       ],
     },
@@ -243,7 +282,7 @@ export async function requestApproval(args: {
     targetChannel = dm.channel?.id ?? logEntry.triggeredBy;
   }
 
-  await slackClient.chat.postMessage({
+  const result = await slackClient.chat.postMessage({
     channel: targetChannel,
     ...(context.threadTs ? { thread_ts: context.threadTs } : {}),
     text: `Approval required for ${toolName} (${riskTier})`,
@@ -271,7 +310,10 @@ export async function requestApproval(args: {
     toolName,
     riskTier,
     channel: targetChannel,
+    messageTs: result.ts,
   });
+
+  return result.ts ? { ts: result.ts, channelId: targetChannel } : null;
 }
 
 // ── Handle Approval Reaction ────────────────────────────────────────────────
@@ -340,14 +382,29 @@ export async function handleApprovalReaction(args: {
   const isApproved = reaction === "white_check_mark";
   const newStatus = isApproved ? "approved" : "rejected";
 
-  await db
+  // Atomic compare-and-set to prevent race condition (P0-1 fix)
+  const updated = await db
     .update(actionLog)
     .set({
       status: newStatus,
       approvedBy: reactorUserId,
       approvedAt: new Date(),
     })
-    .where(eq(actionLog.id, actionLogId));
+    .where(
+      and(
+        eq(actionLog.id, actionLogId),
+        eq(actionLog.status, "pending_approval")
+      )
+    )
+    .returning({ id: actionLog.id });
+
+  if (updated.length === 0) {
+    logger.info("handleApprovalReaction: action already processed by another approver", {
+      actionLogId,
+      reactorUserId,
+    });
+    return;
+  }
 
   if (entry.jobId) {
     if (isApproved) {
