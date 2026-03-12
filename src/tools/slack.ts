@@ -22,6 +22,7 @@ import { createSubagentTools } from "./subagents.js";
 import { createVoiceTools } from "./voice.js";
 import { createResourceTools } from "./resources.js";
 import { createHttpRequestTool } from "./http-request.js";
+import { createBatchTools } from "./batch.js";
 import type { ScheduleContext } from "../db/schema.js";
 import { formatForSlack } from "../lib/format.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
@@ -3002,6 +3003,9 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
 
     // ── HTTP Request Tool (governed external API calls) ─────────────
     ...createHttpRequestTool(context),
+
+    // ── Batch Tools (bulk operations with approval) ──────────────────
+    ...createBatchTools(),
   };
 
   // ── Anthropic Tool Discovery ──────────────────────────────────────

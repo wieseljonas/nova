@@ -823,3 +823,87 @@ export const content = pgTable(
 
 export type Content = typeof content.$inferSelect;
 export type NewContent = typeof content.$inferInsert;
+
+// ── Batch Proposals (bulk operations with approval) ─────────────────────────
+
+export const batchProposals = pgTable(
+  "batch_proposals",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    actionType: text("action_type").notNull(),
+    status: text("status")
+      .$type<"pending_review" | "approved" | "rejected" | "executing" | "completed" | "failed" | "partially_completed">()
+      .notNull()
+      .default("pending_review"),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+    approvedBy: text("approved_by"),
+    approvedAt: timestamptz("approved_at"),
+    executedAt: timestamptz("executed_at"),
+    completedAt: timestamptz("completed_at"),
+    approvalMessageTs: text("approval_message_ts"),
+    approvalChannelId: text("approval_channel_id"),
+    credentialName: text("credential_name"),
+    credentialOwner: text("credential_owner"),
+    progressCurrent: integer("progress_current").notNull().default(0),
+    progressTotal: integer("progress_total").notNull(),
+    summaryTitle: text("summary_title"),
+    summaryDetails: text("summary_details"),
+    context: jsonb("context").$type<Record<string, unknown>>(),
+  },
+  (table) => [
+    check(
+      "batch_proposals_status_check",
+      sql`${table.status} IN ('pending_review','approved','rejected','executing','completed','failed','partially_completed')`,
+    ),
+    index("batch_proposals_status_idx").on(table.status),
+    index("batch_proposals_created_by_idx").on(table.createdBy),
+    index("batch_proposals_created_at_idx").on(table.createdAt),
+  ],
+);
+
+export const batchItems = pgTable(
+  "batch_items",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => batchProposals.id, { onDelete: "cascade" }),
+    index: integer("index").notNull(),
+    method: text("method")
+      .$type<"GET" | "POST" | "PUT" | "PATCH" | "DELETE">()
+      .notNull(),
+    url: text("url").notNull(),
+    body: jsonb("body"),
+    headers: jsonb("headers").$type<Record<string, string>>(),
+    status: text("status")
+      .$type<"pending" | "executing" | "success" | "failed" | "skipped">()
+      .notNull()
+      .default("pending"),
+    result: jsonb("result"),
+    executedAt: timestamptz("executed_at"),
+    error: text("error"),
+  },
+  (table) => [
+    check(
+      "batch_items_status_check",
+      sql`${table.status} IN ('pending','executing','success','failed','skipped')`,
+    ),
+    check(
+      "batch_items_method_check",
+      sql`${table.method} IN ('GET','POST','PUT','PATCH','DELETE')`,
+    ),
+    index("batch_items_batch_id_idx").on(table.batchId),
+    index("batch_items_status_idx").on(table.status),
+    uniqueIndex("batch_items_batch_id_index_unique").on(table.batchId, table.index),
+  ],
+);
+
+export type BatchProposal = typeof batchProposals.$inferSelect;
+export type NewBatchProposal = typeof batchProposals.$inferInsert;
+export type BatchItem = typeof batchItems.$inferSelect;
+export type NewBatchItem = typeof batchItems.$inferInsert;

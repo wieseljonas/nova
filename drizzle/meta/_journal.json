@@ -288,6 +288,13 @@
       "when": 1773600000001,
       "tag": "0040_credential_description",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1773686400000,
+      "tag": "0041_batch_proposals",
+      "breakpoints": true
     }
   ]
 }
