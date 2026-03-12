@@ -575,6 +575,7 @@ export const actionLog = pgTable(
     }>(),
     approvalMessageTs: text("approval_message_ts"),
     approvalChannelId: text("approval_channel_id"),
+    summary: jsonb("summary").$type<{ title: string; body: string; details: string }>(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
   },
   (table) => [
@@ -705,6 +706,7 @@ export const credentials = pgTable(
     keyVersion: integer("key_version").notNull().default(1),
     allowedMethods: text("allowed_methods").array(),
     displayName: text("display_name"),
+    description: text("description"),
     expiresAt: timestamptz("expires_at"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),

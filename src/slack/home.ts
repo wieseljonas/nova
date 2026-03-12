@@ -503,6 +503,21 @@ export function buildAddCredentialBlocks(authScheme: AuthScheme = "bearer"): any
     ...valueBlocks,
     {
       type: "input",
+      block_id: "cred_description_block",
+      label: { type: "plain_text", text: "Description (optional)" },
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_description",
+        placeholder: { type: "plain_text", text: "e.g. Close CRM France production" },
+      },
+      hint: {
+        type: "plain_text",
+        text: "Human-readable label shown in approval cards to help approvers understand the context.",
+      },
+    },
+        {
+      type: "input",
       block_id: "cred_expiry_block",
       label: { type: "plain_text", text: "Expiry Date (optional)" },
       optional: true,
@@ -519,7 +534,21 @@ export function buildUpdateCredentialBlocks(authScheme: AuthScheme = "bearer"): 
   const authSchemeBlock = buildAuthSchemeBlock(authScheme);
   const valueBlocks = buildCredentialValueBlocks(authScheme);
 
-  return [authSchemeBlock, ...valueBlocks];
+  return [
+    authSchemeBlock,
+    ...valueBlocks,
+    {
+      type: "input",
+      block_id: "cred_description_block",
+      label: { type: "plain_text", text: "Description (optional)" },
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_description",
+        placeholder: { type: "plain_text", text: "e.g. Close CRM France production" },
+      },
+    },
+  ];
 }
 
 export async function openAddCredentialModal(
