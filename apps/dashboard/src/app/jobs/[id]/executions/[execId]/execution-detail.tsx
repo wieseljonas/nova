@@ -47,14 +47,6 @@ function Collapsible({
   );
 }
 
-function PromptBlock({ text }: { text: string }) {
-  return (
-    <pre className="whitespace-pre-wrap text-xs font-mono bg-muted rounded-md p-3 overflow-auto max-h-[600px]">
-      {text}
-    </pre>
-  );
-}
-
 function ToolInvocationBlock({ part }: { part: ConversationPart }) {
   const [showInput, setShowInput] = useState(false);
   const [showOutput, setShowOutput] = useState(false);
@@ -338,7 +330,7 @@ function UnifiedTimeline({ conversation, execution }: { conversation: Conversati
         </button>
         {showRaw && (
           <pre className="mt-2 whitespace-pre-wrap text-xs font-mono bg-muted rounded-md p-3 overflow-auto max-h-[600px]">
-            {JSON.stringify(execution.steps, null, 2) ?? "No legacy step data."}
+            {execution.steps ? JSON.stringify(execution.steps, null, 2) : "No legacy step data."}
           </pre>
         )}
       </div>
