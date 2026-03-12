@@ -28,7 +28,7 @@ import {
   updateCredentialMethods,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
-import { handleApprovalReaction, buildViewMoreModal, buildViewRawModal, updateApprovalCard } from "./lib/approval.js";
+import { handleApprovalReaction } from "./lib/approval.js";
 import { executionContext } from "./lib/tool.js";
 import { setSetting } from "./lib/settings.js";
 import { logger } from "./lib/logger.js";

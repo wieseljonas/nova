@@ -445,6 +445,7 @@ export async function requestApproval(args: {
   try {
     const resp = await slackClient.chat.postMessage({
       channel: targetChannel,
+      ...(context.threadTs ? { thread_ts: context.threadTs } : {}),
       text,
       attachments: [
         {
