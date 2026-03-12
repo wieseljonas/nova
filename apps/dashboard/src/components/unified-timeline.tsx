@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import type { ConversationMessage as ConversationMessageRow, ConversationPart } from "@schema";
+import { MarkdownContent } from "@/components/ui/markdown";
 
 export type ConversationMessageWithParts = ConversationMessageRow & { parts: ConversationPart[] };
 
@@ -132,6 +133,7 @@ const LONG_TEXT_THRESHOLD = 1000;
 
 function SystemMessageBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewMode, setViewMode] = useState<"markdown" | "raw">("markdown");
   const isLong = text.length > SYSTEM_PREVIEW_LENGTH;
   const preview = isLong ? text.slice(0, SYSTEM_PREVIEW_LENGTH) + "..." : text;
 
@@ -142,11 +144,32 @@ function SystemMessageBlock({ text }: { text: string }) {
         <span className="text-xs text-muted-foreground">
           {text.length.toLocaleString()} chars
         </span>
+        <div className="flex items-center gap-1 ml-auto">
+          <button
+            className={`text-xs px-2 py-0.5 rounded ${viewMode === "raw" ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setViewMode("raw")}
+          >
+            Raw
+          </button>
+          <button
+            className={`text-xs px-2 py-0.5 rounded ${viewMode === "markdown" ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"}`}
+            onClick={() => setViewMode("markdown")}
+          >
+            Markdown
+          </button>
+        </div>
       </div>
       <div className="border-t px-3 py-2">
-        <pre className="whitespace-pre-wrap text-xs font-mono overflow-auto max-h-[600px]">
-          {expanded ? text : preview}
-        </pre>
+        {viewMode === "raw" ? (
+          <pre className="whitespace-pre-wrap text-xs font-mono overflow-auto max-h-[600px]">
+            {expanded ? text : preview}
+          </pre>
+        ) : (
+          <MarkdownContent
+            content={expanded ? text : preview}
+            className="max-w-none overflow-auto max-h-[600px] text-xs"
+          />
+        )}
         {isLong && (
           <button
             className="mt-1 text-xs text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
