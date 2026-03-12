@@ -643,7 +643,7 @@ export async function generateResponse(
           const slackMeta = getSlackMeta(tools[chunk.toolName]);
           const inputArgs = (chunk as any).input ?? {};
           toolCallInputs.set(chunk.toolCallId, inputArgs);
-          const title = (typeof slackMeta?.status === "function" ? slackMeta.status(inputArgs) : slackMeta?.status) ?? "Working on it...";
+          const title = (typeof slackMeta?.status === "function" ? await slackMeta.status(inputArgs) : slackMeta?.status) ?? "Working on it...";
           const details = slackMeta?.detail?.(inputArgs);
           const toolCallPayload = {
             chunks: [{

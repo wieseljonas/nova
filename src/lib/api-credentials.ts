@@ -629,6 +629,20 @@ export async function setCredentialDisplayName(
     .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)));
 }
 
+/** Lightweight lookup -- just the display_name for a credential. Used by status spinners. */
+export async function getCredentialDisplayName(
+  name: string,
+  ownerId: string,
+): Promise<string | null> {
+  validateName(name);
+  const rows = await db
+    .select({ displayName: credentials.displayName })
+    .from(credentials)
+    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)))
+    .limit(1);
+  return rows[0]?.displayName ?? null;
+}
+
 export async function getCredentialMethods(
   credentialName: string,
   ownerId: string,
