@@ -127,10 +127,10 @@ function approvalAwaitingTitle(
     typeof slackMeta?.approvalStatus === "function"
       ? slackMeta.approvalStatus(input)
       : slackMeta?.approvalStatus;
-  const description = customApprovalStatus
-    ?? getToolDescription(toolDef)
-    ?? toolName;
-  return truncate(`Awaiting approval: ${description}`, 150) ?? "Awaiting approval";
+  // Prefer: custom approvalStatus > detail() > toolName (never full description)
+  const detail = slackMeta?.detail?.(input);
+  const label = customApprovalStatus ?? detail ?? toolName;
+  return truncate(`Awaiting approval: ${label}`, 150) ?? "Awaiting approval";
 }
 
 
