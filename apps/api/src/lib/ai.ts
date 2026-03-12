@@ -181,13 +181,6 @@ export function supportsThinking(modelId: string): boolean {
 }
 
 /**
- * Check if a model is Anthropic (general check, not thinking-specific).
- */
-export function isAnthropicModel(modelId: string): boolean {
-  return modelId.includes("anthropic") || modelId.includes("claude");
-}
-
-/**
  * Get the escalation model for automatic model escalation.
  * Used when the default model is struggling — prepareStep can swap to this mid-conversation.
  * Priority: DB setting > env var > default (Opus 4.6)

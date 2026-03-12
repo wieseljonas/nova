@@ -710,7 +710,9 @@ async function runBackgroundTasks(params: {
         const reasoningTexts: string[] = [];
         for (const step of steps) {
           if ((step as any).reasoning) {
-            reasoningTexts.push((step as any).reasoning);
+            const reasoningArray = (step as any).reasoning as Array<{ text: string }>;
+            const text = reasoningArray.map((r) => r.text).join('\n\n');
+            reasoningTexts.push(text);
           }
         }
 
