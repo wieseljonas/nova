@@ -81,6 +81,7 @@ export async function executeBatch(
 
   // Resolve credential once (if provided)
   let authHeaders: Record<string, string> = {};
+  let queryAuthParams: { key: string; secret: string } | null = null;
   if (batch.credentialName && batch.credentialOwner) {
     const credResult = await getApiCredentialWithType(
       batch.credentialName,
@@ -134,11 +135,36 @@ export async function executeBatch(
         authHeaders[parsed.key] = parsed.secret;
         break;
       }
+      case "query": {
+        let parsed: { key: string; secret: string };
+        try {
+          parsed = JSON.parse(credResult.value);
+        } catch {
+          await db
+            .update(batchProposals)
+            .set({ status: "failed", completedAt: new Date() })
+            .where(eq(batchProposals.id, batchId));
+          return { ok: false, error: "query credential value must be JSON {key, secret}" };
+        }
+        if (!parsed.key || !parsed.secret) {
+          await db
+            .update(batchProposals)
+            .set({ status: "failed", completedAt: new Date() })
+            .where(eq(batchProposals.id, batchId));
+          return { ok: false, error: "query credential must include key and secret" };
+        }
+        logger.warn("Using query parameter auth for batch - secrets will be exposed in URLs", {
+          credential: batch.credentialName,
+          batchId,
+        });
+        queryAuthParams = parsed;
+        break;
+      }
       default:
         await db
-          .update(batchProposals)
-          .set({ status: "failed", completedAt: new Date() })
-          .where(eq(batchProposals.id, batchId));
+            .update(batchProposals)
+            .set({ status: "failed", completedAt: new Date() })
+            .where(eq(batchProposals.id, batchId));
         return { ok: false, error: `Unsupported auth scheme for batch execution: ${credResult.authScheme}` };
     }
   }
@@ -161,8 +187,16 @@ export async function executeBatch(
       .where(eq(batchItems.id, item.id));
 
     try {
+      // Apply query auth if needed
+      let requestUrl = item.url;
+      if (queryAuthParams) {
+        const urlObj = new URL(requestUrl);
+        urlObj.searchParams.set(queryAuthParams.key, queryAuthParams.secret);
+        requestUrl = urlObj.toString();
+      }
+
       // SSRF check
-      const { hostname } = new URL(item.url);
+      const { hostname } = new URL(requestUrl);
       const resolved = await dns.resolve4(hostname).catch(() => [] as string[]);
       for (const ip of resolved) {
         if (isPrivateIP(ip)) {
@@ -170,10 +204,10 @@ export async function executeBatch(
         }
       }
 
-      // Build request headers
+      // Build request headers (authHeaders last to prevent override)
       const headers: Record<string, string> = {
-        ...authHeaders,
         ...(item.headers as Record<string, string> | undefined),
+        ...authHeaders,
       };
 
       // Set Content-Type if body present and not already set
@@ -182,7 +216,7 @@ export async function executeBatch(
       }
 
       // Execute HTTP request
-      const response = await fetch(item.url, {
+      const response = await fetch(requestUrl, {
         method: item.method,
         headers,
         body: item.body ? JSON.stringify(item.body) : undefined,

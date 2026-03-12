@@ -840,21 +840,33 @@ app.post("/api/slack/interactions", async (c) => {
         const approvePromise = (async () => {
           try {
             const { batchProposals } = await import("./db/schema.js");
-            const { eq } = await import("drizzle-orm");
+            const { eq, and } = await import("drizzle-orm");
             const { db } = await import("./db/client.js");
             const { executeBatch } = await import("./lib/batch-executor.js");
 
-            // Update batch status to approved
-            await db
+            // Update batch status to approved (only if pending_review)
+            const updated = await db
               .update(batchProposals)
               .set({ status: "approved", approvedBy: userId, approvedAt: new Date() })
-              .where(eq(batchProposals.id, batchId));
+              .where(and(eq(batchProposals.id, batchId), eq(batchProposals.status, "pending_review")))
+              .returning({ id: batchProposals.id, context: batchProposals.context });
+
+            if (updated.length === 0) {
+              logger.warn("Batch approval rejected: not in pending_review status", { batchId, userId });
+              return;
+            }
+
+            // Extract rate limit from batch context
+            const batch = updated[0];
+            const rateLimitMs = (batch.context as any)?.rateLimitMs;
+            const rateLimit = rateLimitMs !== undefined ? { delayMs: rateLimitMs } : undefined;
 
             // Execute batch in background
             const executePromise = executeBatch({
               batchId,
               requestingUserId: userId,
               slackClient,
+              rateLimit,
             });
             waitUntil(executePromise);
 

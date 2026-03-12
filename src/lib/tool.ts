@@ -201,6 +201,10 @@ export function defineTool<TInput, TOutput>(config: {
           const { sql: sqlFn } = await import("drizzle-orm");
           const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
           
+          // Build credential conditions
+          const credentialName = httpInput.credential_name ?? null;
+          const credentialOwner = httpInput.credential_owner ?? null;
+          
           const recentApprovals = await db
             .select()
             .from(actionLog)
@@ -210,7 +214,9 @@ export function defineTool<TInput, TOutput>(config: {
                 AND ${actionLog.triggeredBy} = ${ctx.triggeredBy}
                 AND ${actionLog.approvedAt} > ${fiveMinutesAgo}
                 AND ${actionLog.params}->>'url' = ${httpInput.url as string}
-                AND ${actionLog.params}->>'method' = ${method}`
+                AND ${actionLog.params}->>'method' = ${method}
+                AND (${actionLog.params}->>'credential_name' IS NOT DISTINCT FROM ${credentialName})
+                AND (${actionLog.params}->>'credential_owner' IS NOT DISTINCT FROM ${credentialOwner})`
             )
             .limit(1);
 
