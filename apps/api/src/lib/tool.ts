@@ -11,7 +11,7 @@ import { logger } from "./logger.js";
 
 export class PendingApprovalError extends Error {
   constructor(public readonly actionLogId: string) {
-    super(\`Action pending approval: \${actionLogId}\`);
+    super(`Action pending approval: ${actionLogId}`);
     this.name = "PendingApprovalError";
   }
 }
