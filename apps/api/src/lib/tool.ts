@@ -180,10 +180,6 @@ export function defineTool<TInput, TOutput>(config: {
       }
 
       const ctx = executionContext.getStore();
-      // Auto-approve in headless/job mode (no interactive user)
-      if (ctx?.triggerType === "scheduled_job" || ctx?.triggerType === "autonomous") {
-        return false;
-      }
 
       try {
         const httpInput = input as Record<string, unknown>;
@@ -214,8 +210,19 @@ export function defineTool<TInput, TOutput>(config: {
           policy,
           method,
         );
-        // Write and destructive tiers need approval
-        return riskTier === "write" || riskTier === "destructive";
+        
+        // Destructive tier always needs approval, even for scheduled jobs
+        if (riskTier === "destructive") {
+          return true;
+        }
+        
+        // Auto-approve write tier in headless/job mode (no interactive user)
+        if (ctx?.triggerType === "scheduled_job" || ctx?.triggerType === "autonomous") {
+          return false;
+        }
+        
+        // Write tier needs approval for interactive users
+        return riskTier === "write";
       } catch (err) {
         logger.warn("needsApproval: policy lookup failed, failing closed (requiring approval)", {
           toolName,

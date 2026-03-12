@@ -835,3 +835,8 @@ export async function runCredentialMigration(): Promise<void> {
 
   logger.info("runCredentialMigration: complete");
 }
+
+// Run migration on module load (no-op if already migrated)
+runCredentialMigration().catch((err) => {
+  logger.error("runCredentialMigration: startup migration failed", { error: err });
+});

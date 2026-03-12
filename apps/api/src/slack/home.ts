@@ -742,10 +742,12 @@ export async function openCredentialPermissionsModal(
               text: { type: "plain_text", text: method },
               value: method,
             })),
-            initial_options: selected.map(method => ({
-              text: { type: "plain_text", text: method },
-              value: method,
-            })),
+            ...(selected.length > 0 && {
+              initial_options: selected.map(method => ({
+                text: { type: "plain_text", text: method },
+                value: method,
+              })),
+            }),
           },
         },
         {
