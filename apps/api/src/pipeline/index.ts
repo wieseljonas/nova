@@ -32,13 +32,6 @@ import { getSettingJSON } from "../lib/settings.js";
 import { logger } from "../lib/logger.js";
 import { logError } from "../lib/error-logger.js";
 import { recordPipelineMetrics, recordError } from "../lib/metrics.js";
-import {
-  createConversationTrace,
-  persistConversationInputs,
-  persistConversationSteps,
-  updateConversationTraceUsage,
-  type Step as ConversationStep,
-} from "../cron/persist-conversation.js";
 import type { SlackEvent } from "./context.js";
 
 /** Maximum message length we'll process (characters). Slack max is ~40k. */
@@ -230,7 +223,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     }
 
     // Set assistant thread status — triggers the shimmer animation on
-    // Aura's name and shows a loading indicator while processing.
+    // Nova's name and shows a loading indicator while processing.
     // Requires the `assistant:write` scope (enabled via Agents & AI Apps
     // toggle in Slack app settings). Status auto-clears on reply.
     try {
@@ -391,7 +384,6 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     });
 
     // 7. Background tasks (via waitUntil so they don't block the response)
-    const fullSystemPrompt = [stablePrefix, conversationContext, dynamicContext].filter(Boolean).join("\n\n");
     const backgroundTasks = runBackgroundTasks({
       context: { ...context, text: messageText },
       event,
@@ -400,12 +392,6 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       displayName,
       client,
       threadMessageCount: conversation.thread?.length ?? 0,
-      tokenUsage: response.usage,
-      modelId: response.modelId,
-      systemPrompt: fullSystemPrompt,
-      userPrompt: messageText,
-      stepsPromise: response.stepsPromise,
-      replyThreadTs,
       ...(() => {
         const all = (conversation.thread ?? conversation.recentMessages)
           .map(m => ({ displayName: m.displayName, text: m.text }));
@@ -560,14 +546,8 @@ async function runBackgroundTasks(params: {
   threadMessageCount: number;
   recentThreadMessages: Array<{ displayName: string; text: string }>;
   threadMessagesElided: boolean;
-  tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
-  modelId?: string;
-  systemPrompt?: string;
-  userPrompt?: string;
-  stepsPromise?: PromiseLike<any[]>;
-  replyThreadTs?: string;
 }): Promise<void> {
-  const { context, event, response, toolCalls, displayName, client, threadMessageCount, recentThreadMessages, threadMessagesElided, tokenUsage, modelId, systemPrompt, userPrompt, stepsPromise, replyThreadTs } = params;
+  const { context, event, response, toolCalls, displayName, client, threadMessageCount, recentThreadMessages, threadMessagesElided } = params;
 
   try {
     // Store the user's message
@@ -582,7 +562,7 @@ async function runBackgroundTasks(params: {
       metadata: buildMessageMetadata(event),
     });
 
-    // Store Aura's response with a pseudo-timestamp
+    // Store Nova's response with a pseudo-timestamp
     const assistantTs = `${context.messageTs}-aura`;
     await storeMessage({
       slackTs: assistantTs,
@@ -592,8 +572,6 @@ async function runBackgroundTasks(params: {
       userId: "aura",
       role: "assistant",
       content: response,
-      tokenUsage,
-      model: modelId,
     });
 
     // Store tool call I/O as durable messages
@@ -645,108 +623,6 @@ async function runBackgroundTasks(params: {
       context.text,
       response,
     );
-
-    // Persist conversation trace for interactive messages
-    if (systemPrompt && userPrompt) {
-      try {
-        const conversationId = await createConversationTrace({
-          sourceType: "interactive",
-          channelId: context.channelId,
-          threadTs: replyThreadTs || context.threadTs,
-          userId: context.userId,
-          modelId,
-        });
-
-        const orderIndex = await persistConversationInputs(
-          conversationId,
-          systemPrompt,
-          userPrompt,
-        );
-
-        if (stepsPromise) {
-          try {
-            const rawSteps = await stepsPromise;
-            const conversationSteps: ConversationStep[] = rawSteps.map((step: any) => ({
-              text: step.text,
-              reasoning: step.reasoning,
-              toolCalls: step.toolCalls?.map((tc: any) => ({
-                toolCallId: tc.toolCallId,
-                toolName: tc.toolName,
-                input: tc.input,
-              })),
-              toolResults: step.toolResults?.map((tr: any) => ({
-                toolCallId: tr.toolCallId,
-                toolName: tr.toolName,
-                output: tr.output,
-              })),
-              finishReason: step.finishReason,
-            }));
-            await persistConversationSteps(conversationId, conversationSteps, orderIndex);
-          } catch (stepsErr: any) {
-            logger.error("Failed to persist conversation steps (non-fatal)", {
-              conversationId,
-              error: stepsErr.message,
-            });
-          }
-        }
-
-        if (tokenUsage) {
-          await updateConversationTraceUsage(conversationId, tokenUsage);
-        }
-
-        logger.info("Interactive conversation trace persisted", { conversationId });
-      } catch (traceErr: any) {
-        logger.error("Failed to persist interactive conversation trace (non-fatal)", {
-          error: traceErr.message,
-          channelId: context.channelId,
-        });
-      }
-    }
-
-    // Post optional reasoning trace as a thread reply (gated by env var)
-    if (process.env.SHOW_REASONING_IN_SLACK === "true" && stepsPromise && replyThreadTs) {
-      try {
-        const steps = await stepsPromise;
-        const reasoningTexts: string[] = [];
-        for (const step of steps) {
-          if ((step as any).reasoning) {
-            reasoningTexts.push((step as any).reasoning);
-          }
-        }
-
-        if (reasoningTexts.length > 0) {
-          const fullReasoning = reasoningTexts.join("\n\n---\n\n");
-          const reasoningTokens = Math.ceil(fullReasoning.length / 4);
-          const preview = fullReasoning.slice(0, 500);
-          const truncated = fullReasoning.length > 500;
-          const quotedPreview = preview
-            .split("\n")
-            .map((line) => `>${line}`)
-            .join("\n");
-
-          const replyText =
-            `:brain: _Reasoning trace_ (${reasoningTokens.toLocaleString()} tokens)\n` +
-            quotedPreview +
-            (truncated ? "\n>_Full trace available in dashboard_" : "");
-
-          await safePostMessage(client, {
-            channel: context.channelId,
-            text: replyText,
-            thread_ts: replyThreadTs,
-          });
-
-          logger.info("Posted reasoning trace to Slack", {
-            channelId: context.channelId,
-            reasoningLength: fullReasoning.length,
-            reasoningTokens,
-          });
-        }
-      } catch (reasoningErr: any) {
-        logger.warn("Failed to post reasoning trace to Slack (non-fatal)", {
-          error: reasoningErr?.message || String(reasoningErr),
-        });
-      }
-    }
 
     // Set or update DM thread title for the Assistant History tab.
     // Runs last so the LLM call doesn't delay critical background work above.

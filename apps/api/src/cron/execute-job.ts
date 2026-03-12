@@ -5,17 +5,7 @@ import { jobs, notes, jobExecutions } from "@aura/db/schema";
 import { logger } from "../lib/logger.js";
 import { safePostMessage } from "../lib/slack-messaging.js";
 import { createHeadlessAgent } from "../lib/agents.js";
-import { executionContext, PendingApprovalError } from "../lib/tool.js";
-import { getCurrentTimeContext } from "../lib/temporal.js";
-import { buildStablePrefix } from "../personality/system-prompt.js";
-import {
-  createConversationTrace,
-  persistConversationInputs,
-  persistConversationSteps,
-  persistConversationError,
-  updateConversationTraceUsage,
-  type Step as ConversationStep,
-} from "./persist-conversation.js";
+import { executionContext } from "../lib/tool.js";
 
 const botToken = process.env.SLACK_BOT_TOKEN || "";
 const slackClient = new WebClient(botToken);
@@ -23,27 +13,32 @@ const slackClient = new WebClient(botToken);
 /** Max retries before marking as failed */
 export const MAX_RETRIES = 3;
 
-/** Retry delay in ms (30 minutes — matches heartbeat cron interval) */
-const RETRY_DELAY_MS = 30 * 60 * 1000;
+/** Retry delay in ms (10 minutes — matches heartbeat cron interval) */
+const RETRY_DELAY_MS = 10 * 60 * 1000;
 
-// ── Job-specific additive instructions ───────────────────────────────────────
+// ── System Prompts ───────────────────────────────────────────────────────────
 
-const JOB_SPECIFIC_INSTRUCTIONS = `## Job execution mode
+const JOB_SYSTEM_PROMPT = `You are Nova executing a job autonomously. You have full access to your tools.
 
-You are executing a scheduled job autonomously. Additional rules for this mode:
-- Execute the task described below using your tools.
-- Post results to the specified channel unless the task says otherwise.
-- If you have "previous result" context, compare and highlight changes.
-- If you discover something urgent, escalate via DM or create a follow-up job.
-- Be concise. Digests and summaries, not essays.`;
+Rules:
+- Execute the task described below. Use your tools to read channels, post messages, look up users, etc.
+- Post results to the channel specified unless the task says otherwise.
+- If you have "previous result" context, compare and highlight changes (e.g. "17 bugs yesterday, 22 today -- that's a spike").
+- If you discover something urgent or unexpected, you can:
+  - Create a follow-up job (create_job)
+  - DM the person who requested this to escalate (send_direct_message)
+  - Save findings to your notes for future reference (save_note / edit_note)
+- If the task no longer makes sense (channel deleted, user gone, etc.), note that in your result.
+- Be concise. Digests and summaries, not essays.
+- Do NOT respond conversationally. Just execute the task and report.`;
 
-const CONTINUATION_SPECIFIC_INSTRUCTIONS = `## Continuation mode
+const CONTINUATION_SYSTEM_PROMPT = `You are Nova resuming a multi-step task. Your accumulated progress and context are below.
 
-You are resuming a multi-step task. Your accumulated progress and context are below. Additional rules for this mode:
+Rules:
 - Continue from where you left off. The plan note contains your progress, next steps, and context.
 - If you can't finish in this round, use checkpoint_plan again to save progress and schedule another continuation.
 - Post results in the thread you're continuing (routing is automatic).
-- Be concise and focused. Don't re-explain what was already done -- just continue the work.
+- Be concise and focused. Don't re-explain what was already done — just continue the work.
 - If the continuation depth limit is reached, explain your current status and ask if you should keep going.`;
 
 // ── Continuation Detection ───────────────────────────────────────────────────
@@ -68,6 +63,7 @@ async function loadPlanNote(topic: string): Promise<string | null> {
 
 export async function executeJob(
   job: typeof jobs.$inferSelect,
+  skillIndex: string,
   trigger: "heartbeat" | "dispatch" | "continuation" = "heartbeat",
 ): Promise<boolean> {
   const jobId = job.id;
@@ -99,11 +95,6 @@ export async function executeJob(
 
   const executionId = execution.id;
 
-  // Tracks next message order_index; set by persistConversationInputs,
-  // used by error handler if generate throws.
-  let conversationOrderIndex = 0;
-  let conversationId: string | undefined;
-
   try {
     const planTopic = parseContinuationTag(job.description);
     const isContinuation = planTopic !== null;
@@ -126,9 +117,6 @@ export async function executeJob(
         ? `\n\nAuthorized credential IDs for this job: ${credentialIds.join(", ")}`
         : "";
 
-    const stablePrefix = await buildStablePrefix();
-    const timeContext = getCurrentTimeContext(job.timezone);
-
     if (isContinuation) {
       const planContent = await loadPlanNote(planTopic);
       const nextSteps = job.description.replace(CONTINUE_TAG_RE, "");
@@ -137,7 +125,7 @@ export async function executeJob(
         ? `Plan note "${planTopic}":\n\n${planContent}\n\nNext steps to execute:\n${nextSteps}${credentialNote}`
         : `Plan note "${planTopic}" not found. Original instructions:\n${nextSteps}${credentialNote}`;
 
-      systemPrompt = stablePrefix + "\n\n" + timeContext + "\n\n" + CONTINUATION_SPECIFIC_INSTRUCTIONS;
+      systemPrompt = CONTINUATION_SYSTEM_PROMPT + skillIndex;
 
       logger.info("Heartbeat: executing continuation", {
         jobId,
@@ -155,7 +143,7 @@ export async function executeJob(
         prompt += `\n\nPrevious result for context:\n${job.lastResult}`;
       }
 
-      systemPrompt = stablePrefix + "\n\n" + timeContext + "\n\n" + JOB_SPECIFIC_INSTRUCTIONS;
+      systemPrompt = JOB_SYSTEM_PROMPT + skillIndex;
 
       logger.info("Heartbeat: executing job", {
         jobId,
@@ -175,7 +163,7 @@ export async function executeJob(
       prompt += `\n\nIMPORTANT: Post your results to channel "${job.channelId}" using send_channel_message. Do NOT use send_direct_message.`;
     }
 
-    const { agent, modelId } = await createHeadlessAgent({
+    const { agent } = await createHeadlessAgent({
       slackClient,
       context: {
         userId: job.requestedBy,
@@ -184,21 +172,6 @@ export async function executeJob(
       },
       systemPrompt,
     });
-
-    // Create a conversation trace for this job execution
-    conversationId = await createConversationTrace({
-      sourceType: "job_execution",
-      jobExecutionId: executionId,
-      modelId,
-    });
-
-    // Phase 1: persist the exact inputs BEFORE calling generate.
-    // If the process crashes mid-execution, we still have what was sent.
-    conversationOrderIndex = await persistConversationInputs(
-      conversationId,
-      systemPrompt,
-      prompt,
-    );
 
     const generateResult = await executionContext.run(
       {
@@ -210,24 +183,6 @@ export async function executeJob(
     );
 
     const { text, steps, totalUsage: usage } = generateResult;
-
-    // Phase 2a: persist assistant steps now that generate succeeded
-    const conversationSteps: ConversationStep[] = steps.map((step) => ({
-      text: step.text,
-      reasoning: (step as any).reasoning,
-      toolCalls: step.toolCalls?.map((tc) => ({
-        toolCallId: tc.toolCallId,
-        toolName: tc.toolName,
-        input: tc.input,
-      })),
-      toolResults: step.toolResults?.map((tr) => ({
-        toolCallId: tr.toolCallId,
-        toolName: tr.toolName,
-        output: tr.output,
-      })),
-      finishReason: step.finishReason,
-    }));
-    await persistConversationSteps(conversationId, conversationSteps, conversationOrderIndex);
 
     const serializedSteps = steps.map((step) => ({
       type: step.finishReason,
@@ -243,13 +198,10 @@ export async function executeJob(
     }));
 
     const tokenUsage = {
-      inputTokens: usage.inputTokens ?? 0,
-      outputTokens: usage.outputTokens ?? 0,
-      totalTokens: usage.totalTokens ?? 0,
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      total: usage.totalTokens,
     };
-
-    // Update trace with token usage
-    await updateConversationTraceUsage(conversationId, tokenUsage);
 
     // Update execution trace with results
     await db
@@ -309,42 +261,6 @@ export async function executeJob(
 
     return true;
   } catch (error: any) {
-    // Persist the error in conversation history regardless of error type
-    if (conversationId) {
-      await persistConversationError(conversationId, error, conversationOrderIndex);
-    }
-
-    // Governance: if a tool requires approval, suspend the job
-    if (error instanceof PendingApprovalError) {
-      try {
-        await db
-          .update(jobExecutions)
-          .set({
-            status: "failed",
-            finishedAt: new Date(),
-            error: `Awaiting approval: ${error.actionLogId}`,
-          })
-          .where(eq(jobExecutions.id, executionId));
-      } catch { /* non-critical */ }
-
-      await db
-        .update(jobs)
-        .set({
-          status: "pending",
-          approvalStatus: "awaiting_approval",
-          pendingActionLogId: error.actionLogId,
-          updatedAt: new Date(),
-        })
-        .where(eq(jobs.id, jobId));
-
-      logger.info("executeJob: job suspended awaiting approval", {
-        jobId,
-        jobName: job.name,
-        actionLogId: error.actionLogId,
-      });
-      return true;
-    }
-
     // Update execution trace with failure (protected so it can't break retry logic)
     try {
       await db

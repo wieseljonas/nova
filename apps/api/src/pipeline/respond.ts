@@ -6,7 +6,7 @@ import { logError } from "../lib/error-logger.js";
 import { formatForSlack, prettifyAndWrapTable } from "../lib/format.js";
 import { TABLE_BLOCK_KEY } from "../tools/table.js";
 import { safePostMessage, isChannelTypeNotSupported, isInvalidBlocks, isMsgTooLong } from "../lib/slack-messaging.js";
-import { getSlackMeta } from "../lib/tool.js";
+import { getSlackMeta, getToolDescription, executionContext } from "../lib/tool.js";
 import { createInteractiveAgent } from "../lib/agents.js";
 import { getMainModel, buildCachedSystemMessages } from "../lib/ai.js";
 
@@ -117,6 +117,22 @@ function truncate(s: string | undefined, max: number): string | undefined {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
 }
 
+function approvalAwaitingTitle(
+  toolDef: unknown,
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  const slackMeta = getSlackMeta(toolDef);
+  const customApprovalStatus =
+    typeof slackMeta?.approvalStatus === "function"
+      ? slackMeta.approvalStatus(input)
+      : slackMeta?.approvalStatus;
+  // Prefer: custom approvalStatus > detail() > toolName (never full description)
+  const detail = slackMeta?.detail?.(input);
+  const label = customApprovalStatus ?? detail ?? toolName;
+  return truncate(`Awaiting approval: ${label}`, 150) ?? "Awaiting approval";
+}
+
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -156,10 +172,6 @@ export interface LLMResponse {
   };
   /** Tool calls executed during this response */
   toolCalls: ToolCallRecord[];
-  /** Model ID used for this response */
-  modelId?: string;
-  /** Promise that resolves to the conversation steps (for persistence) */
-  stepsPromise?: PromiseLike<any[]>;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -539,18 +551,10 @@ export async function generateResponse(
   }
 
   try {
-    // Signal extended thinking phase to the user via Slack thread status
-    try {
-      await slackClient.assistant.threads.setStatus({
-        channel_id: channelId,
-        thread_ts: threadTs,
-        status: "Thinking deeply...",
-      });
-    } catch {
-      // Non-fatal: scope may not be configured or channel type unsupported
-    }
-
     const result = await agent.stream(streamCallOptions as any);
+
+    // Track tool call inputs so result/error handlers can resolve dynamic status
+    const toolCallInputs = new Map<string, Record<string, unknown>>();
 
     for await (const chunk of result.fullStream) {
       resetTimer();
@@ -637,8 +641,9 @@ export async function generateResponse(
           }
 
           const slackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = slackMeta?.status ?? "Working on it...";
           const inputArgs = (chunk as any).input ?? {};
+          toolCallInputs.set(chunk.toolCallId, inputArgs);
+          const title = (typeof slackMeta?.status === "function" ? await slackMeta.status(inputArgs) : slackMeta?.status) ?? "Working on it...";
           const details = slackMeta?.detail?.(inputArgs);
           const toolCallPayload = {
             chunks: [{
@@ -682,7 +687,7 @@ export async function generateResponse(
 
         case "tool-result": {
           const resultSlackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = resultSlackMeta?.status ?? "Done";
+          const title = (typeof resultSlackMeta?.status === "function" ? await resultSlackMeta.status(toolCallInputs.get(chunk.toolCallId) ?? {}) : resultSlackMeta?.status) ?? "Done";
           const output = chunk.output;
           const isError = output && typeof output === "object" &&
             "ok" in output && output.ok === false;
@@ -744,7 +749,7 @@ export async function generateResponse(
           const errToolName = (chunk as any).toolName;
           const errToolCallId = (chunk as any).toolCallId;
           const errSlackMeta = getSlackMeta(tools[errToolName]);
-          const title = errSlackMeta?.status ?? "Failed";
+          const title = (typeof errSlackMeta?.status === "function" ? await errSlackMeta.status(toolCallInputs.get(errToolCallId) ?? {}) : errSlackMeta?.status) ?? "Failed";
           const err = (chunk as any).error;
           const errorMsg = err instanceof Error ? err.message : String(err);
           const toolErrorPayload = {
@@ -782,6 +787,179 @@ export async function generateResponse(
               fallbackStartIdx = accumulatedText.length;
             }
           }
+          break;
+        }
+
+        case "tool-approval-request": {
+          // SDK-native HITL: a tool needs human approval before execution
+          const approvalChunk = chunk as any;
+          const approvalToolCall = approvalChunk.toolCall ?? {};
+          const approvalToolName = approvalToolCall.toolName || "unknown";
+          const approvalToolCallId = approvalToolCall.toolCallId || approvalChunk.toolCallId || "";
+          const approvalId = approvalChunk.approvalId || "";
+          const approvalInput = approvalToolCall.input ?? {};
+
+          logger.info("HITL: tool-approval-request received", {
+            toolName: approvalToolName,
+            toolCallId: approvalToolCallId,
+            approvalId,
+          });
+
+          try {
+            const approvalToolDef = tools[approvalToolName];
+            const approvalSlackMeta = getSlackMeta(approvalToolDef);
+            const details = approvalSlackMeta?.detail?.(approvalInput);
+            if (approvalToolCallId) {
+              const awaitingPayload = {
+                chunks: [{
+                  type: "task_update",
+                  id: approvalToolCallId,
+                  title: approvalAwaitingTitle(
+                    approvalToolDef,
+                    approvalToolName,
+                    approvalInput as Record<string, unknown>,
+                  ),
+                  status: "pending",
+                  ...(details && { details }),
+                }],
+              };
+              currentStreamLength += estimateAppendSize(awaitingPayload);
+              if (!streamingFailed) {
+                await tryStreamAppend(awaitingPayload);
+                if (streamingFailed) {
+                  fallbackStartIdx = accumulatedText.length;
+                }
+              }
+            }
+
+            const pending = pendingToolInputs.get(approvalToolCallId);
+            toolCallRecords.push({
+              name: approvalToolName,
+              input: pending?.input ?? truncateToBytes(JSON.stringify(approvalInput), 1500),
+              output: "Awaiting human approval",
+              is_error: false,
+            });
+            if (approvalToolCallId) pendingToolInputs.delete(approvalToolCallId);
+
+            if (pendingToolInputs.size === 0 && toolKeepAlive) { clearInterval(toolKeepAlive); toolKeepAlive = null; }
+            if (pendingToolInputs.size === 0 && streamKeepAlive) { clearInterval(streamKeepAlive); streamKeepAlive = null; }
+            resetTimer();
+
+            // Save conversation state for resumption after approval
+            const { db } = await import("../db/client.js");
+            const { actionLog } = await import("@aura/db/schema");
+            const { requestApproval, effectiveRiskTier, lookupPolicy } = await import("../lib/approval.js");
+
+            const ctx = executionContext.getStore() ?? {
+              triggeredBy: "unknown",
+              triggerType: "autonomous" as const,
+            };
+
+            // Determine risk tier for the approval message
+            const httpInput = approvalInput as Record<string, unknown>;
+            const policy = await lookupPolicy({
+              toolName: approvalToolName,
+              url: approvalToolName === "http_request" ? (httpInput.url as string) : undefined,
+              method: approvalToolName === "http_request" ? (httpInput.method as string) : undefined,
+              credentialName: httpInput.credential_name as string | undefined,
+            }).catch(() => null);
+            const riskTier = effectiveRiskTier(
+              policy,
+              approvalToolName === "http_request" ? (httpInput.method as string) : undefined,
+            );
+
+            // Don't await result.response inside the stream loop - it may not resolve
+            // until the stream finishes, causing a deadlock. Use the input messages
+            // we already have, which are sufficient for replay.
+
+            // Insert action_log entry
+            const { eq } = await import("drizzle-orm");
+            const [logEntry] = await db
+              .insert(actionLog)
+              .values({
+                toolName: approvalToolName,
+                params: approvalInput as any,
+                triggerType: ctx.triggerType,
+                triggeredBy: ctx.triggeredBy,
+                jobId: ctx.jobId ?? null,
+                credentialName: (approvalInput as any)?.credential_name ?? null,
+                riskTier,
+                status: "pending_approval",
+                conversationState: {
+                  channelId,
+                  threadTs,
+                  userId: ctx.triggeredBy,
+                  channelType: options.channelType || "channel",
+                  messages: streamCallOptions.messages || (streamCallOptions.prompt != null ? [{ role: "user" as const, content: streamCallOptions.prompt }] : []),
+                  // Include the assistant's tool call so the SDK can match the approval response
+                  assistantToolCall: {
+                    toolName: approvalToolName,
+                    toolCallId: approvalToolCallId,
+                    input: approvalInput,
+                  },
+                  toolCallId: approvalToolCallId,
+                  approvalId,
+                  stablePrefix: options.stablePrefix,
+                  conversationContext: options.conversationContext,
+                  dynamicContext: options.dynamicContext,
+                  files: options.files,
+                  teamId: options.teamId,
+                  timezone: options.context?.timezone,
+                  modelId,
+                },
+              })
+              .returning({ id: actionLog.id });
+
+            // Post approval buttons
+            const approvalMessageInfo = await requestApproval({
+              actionLogId: logEntry.id,
+              toolName: approvalToolName,
+              params: approvalInput,
+              riskTier,
+              policy,
+              context: {
+                channelId,
+                threadTs,
+                jobId: ctx.jobId,
+                triggerType: ctx.triggerType,
+                userId: ctx.triggeredBy,
+              },
+              slackClient,
+            });
+
+            // Store approval message location
+            if (approvalMessageInfo) {
+              await db
+                .update(actionLog)
+                .set({
+                  approvalMessageTs: approvalMessageInfo.ts,
+                  approvalChannelId: approvalMessageInfo.channelId,
+                })
+                .where(eq(actionLog.id, logEntry.id));
+            }
+
+            logger.info("HITL: approval request saved and posted", {
+              actionLogId: logEntry.id,
+              toolName: approvalToolName,
+              approvalId,
+            });
+          } catch (approvalErr: any) {
+            logger.error("HITL: failed to save/post approval request", {
+              toolName: approvalToolName,
+              error: approvalErr?.message,
+              stack: approvalErr?.stack,
+            });
+            // P0-3: Notify user so the request doesn't silently hang
+            try {
+              const { safePostMessage } = await import("../lib/slack-messaging.js");
+              await safePostMessage(slackClient, {
+                channel: channelId,
+                thread_ts: threadTs,
+                text: `⚠️ Failed to create approval request for \`${approvalToolName}\`. Please retry your request.`,
+              });
+            } catch { /* last resort - already logged above */ }
+          }
+
           break;
         }
       }
@@ -972,8 +1150,6 @@ export async function generateResponse(
       alreadyPosted: true,
       usage: { inputTokens, outputTokens, totalTokens },
       toolCalls: toolCallRecords,
-      modelId,
-      stepsPromise: result.steps,
     };
   } catch (error: any) {
     clearTimeout(inactivityTimer);
@@ -1055,7 +1231,6 @@ export async function generateResponse(
             totalTokens: retryInputTokens + retryOutputTokens,
           },
           toolCalls: toolCallRecords,
-          modelId,
         };
       } catch (retryError: any) {
         clearTimeout(retryInactivityTimer);
@@ -1111,7 +1286,6 @@ export async function generateResponse(
             alreadyPosted: true,
             usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
             toolCalls: toolCallRecords,
-            modelId,
           };
         }
         logger.warn("LLM response lost — channel does not support posting", {

@@ -7,6 +7,7 @@ import {
   listApiCredentials,
   listGrantsForCredentials,
   getCredentialById,
+  type AuthScheme,
 } from "../lib/api-credentials.js";
 
 // ── Model Catalog ────────────────────────────────────────────────────────────
@@ -154,7 +155,7 @@ async function buildCredentialBlocks(): Promise<any[]> {
 
 // ── User API Credential Blocks ──────────────────────────────────────────────
 
-async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
+async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): Promise<any[]> {
   const creds = await listApiCredentials(userId);
 
   const blocks: any[] = [
@@ -172,17 +173,21 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
         },
       ],
     },
-    {
-      type: "actions",
-      elements: [
-        {
-          type: "button",
-          text: { type: "plain_text", text: "+ Add Credential", emoji: true },
-          action_id: "api_credential_add",
-          style: "primary",
-        },
-      ],
-    },
+    ...(userIsAdmin
+      ? [
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "+ Add Credential", emoji: true },
+                action_id: "api_credential_add",
+                style: "primary",
+              },
+            ],
+          },
+        ]
+      : []),
   ];
 
   if (creds.length === 0) {
@@ -224,12 +229,20 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
         : `  ·  expires ${expiresAt.toISOString().slice(0, 10)}`;
     }
 
-    const overflowOptions: any[] = [
-      {
+    const canWrite = isOwner || cred.permission === "write" || cred.permission === "admin";
+    const overflowOptions: any[] = [];
+    if (canWrite) {
+      overflowOptions.push({
         text: { type: "plain_text", text: "Update" },
         value: `api_credential_update_${cred.id}`,
-      },
-    ];
+      });
+    }
+    if (isOwner) {
+      overflowOptions.push({
+        text: { type: "plain_text", text: "Permissions" },
+        value: `api_credential_permissions_${cred.id}`,
+      });
+    }
     if (isOwner) {
       overflowOptions.push(
         {
@@ -251,18 +264,27 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
       });
     }
 
-    blocks.push({
+    let methodsText = "";
+    if (cred.allowed_methods && cred.allowed_methods.length > 0) {
+      const methods = cred.allowed_methods.map(m => m.toUpperCase()).join(", ");
+      methodsText = `\nAllowed methods (skip approval): ${methods}`;
+    }
+
+    const section: any = {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${cred.name}*  ·  _${source}_ (${permLabel})${expiryText}`,
+        text: `*${cred.name}*  ·  _${source}_ (${permLabel})${expiryText}${methodsText}`,
       },
-      accessory: {
+    };
+    if (overflowOptions.length > 0) {
+      section.accessory = {
         type: "overflow",
         action_id: `api_credential_overflow_${cred.id}`,
         options: overflowOptions,
-      },
-    });
+      };
+    }
+    blocks.push(section);
   }
 
   return blocks;
@@ -270,80 +292,197 @@ async function buildUserCredentialBlocks(userId: string): Promise<any[]> {
 
 // ── User Credential Modals ──────────────────────────────────────────────────
 
-export function buildAddCredentialBlocks(credType: "token" | "oauth_client" = "token"): any[] {
-  const typeBlock = {
+
+function buildAuthSchemeBlock(authScheme: AuthScheme) {
+  return {
     type: "input",
-    block_id: "cred_type_block",
+    block_id: "cred_auth_scheme_block",
     dispatch_action: true,
-    label: { type: "plain_text", text: "Type" },
+    label: { type: "plain_text", text: "Auth Scheme" },
     element: {
       type: "static_select",
-      action_id: "cred_type",
+      action_id: "cred_auth_scheme",
       options: [
-        { text: { type: "plain_text", text: "Token" }, value: "token" },
+        { text: { type: "plain_text", text: "Bearer" }, value: "bearer" },
+        { text: { type: "plain_text", text: "Basic" }, value: "basic" },
+        { text: { type: "plain_text", text: "Header" }, value: "header" },
+        { text: { type: "plain_text", text: "Query" }, value: "query" },
         { text: { type: "plain_text", text: "OAuth Client" }, value: "oauth_client" },
+        { text: { type: "plain_text", text: "Google Service Account" }, value: "google_service_account" },
       ],
-      initial_option: credType === "oauth_client"
-        ? { text: { type: "plain_text", text: "OAuth Client" }, value: "oauth_client" }
-        : { text: { type: "plain_text", text: "Token" }, value: "token" },
+      initial_option: (() => {
+        const labels: Record<AuthScheme, string> = {
+          bearer: "Bearer",
+          basic: "Basic",
+          header: "Header",
+          query: "Query",
+          oauth_client: "OAuth Client",
+          google_service_account: "Google Service Account",
+        };
+        return { text: { type: "plain_text", text: labels[authScheme] }, value: authScheme };
+      })(),
     },
   };
+}
 
-  const valueBlocks = credType === "oauth_client"
-    ? [
-        {
-          type: "input",
-          block_id: "cred_client_id_block",
-          label: { type: "plain_text", text: "Client ID" },
-          element: {
-            type: "plain_text_input",
-            action_id: "cred_client_id",
-            placeholder: { type: "plain_text", text: "Paste client ID" },
+function buildCredentialValueBlocks(authScheme: AuthScheme): any[] {
+  if (authScheme === "oauth_client") {
+    return [
+      {
+        type: "input",
+        block_id: "cred_client_id_block",
+        label: { type: "plain_text", text: "Client ID" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_client_id",
+          placeholder: { type: "plain_text", text: "Paste client ID" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "cred_client_secret_block",
+        label: { type: "plain_text", text: "Client Secret" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_client_secret",
+          placeholder: { type: "plain_text", text: "Paste client secret" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "cred_token_url_block",
+        label: { type: "plain_text", text: "Token URL" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_token_url",
+          placeholder: {
+            type: "plain_text",
+            text: "https://cloud.airbyte.com/api/v1/applications/token",
           },
         },
-        {
-          type: "input",
-          block_id: "cred_client_secret_block",
-          label: { type: "plain_text", text: "Client Secret" },
-          element: {
-            type: "plain_text_input",
-            action_id: "cred_client_secret",
-            placeholder: { type: "plain_text", text: "Paste client secret" },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Credentials will be automatically exchanged for an access token when retrieved.",
+          },
+        ],
+      },
+    ];
+  }
+
+  if (authScheme === "google_service_account") {
+    return [
+      {
+        type: "input",
+        block_id: "cred_gsa_json_block",
+        label: { type: "plain_text", text: "Service Account JSON Key" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_gsa_json",
+          multiline: true,
+          placeholder: { type: "plain_text", text: "Paste the full JSON key file contents" },
+        },
+      },
+      {
+        type: "input",
+        block_id: "cred_gsa_scopes_block",
+        optional: true,
+        label: { type: "plain_text", text: "Scopes (optional)" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_gsa_scopes",
+          placeholder: {
+            type: "plain_text",
+            text: "e.g. https://www.googleapis.com/auth/bigquery.readonly",
           },
         },
-        {
-          type: "input",
-          block_id: "cred_token_url_block",
-          optional: true,
-          label: { type: "plain_text", text: "Token URL (optional)" },
-          element: {
-            type: "plain_text_input",
-            action_id: "cred_token_url",
-            placeholder: { type: "plain_text", text: "https://cloud.airbyte.com/api/v1/applications/token" },
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: "Defaults to `cloud-platform` scope. Comma-separate multiple scopes. The JSON key is encrypted at rest and used server-side to mint short-lived OAuth2 tokens via JWT exchange.",
           },
+        ],
+      },
+    ];
+  }
+
+  if (authScheme === "header" || authScheme === "query") {
+    const keyLabel = authScheme === "header" ? "Header Name" : "Query Key";
+    const keyPlaceholder =
+      authScheme === "header" ? "e.g. x-api-key" : "e.g. api_key";
+    return [
+      {
+        type: "input",
+        block_id: "cred_key_block",
+        label: { type: "plain_text", text: keyLabel },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_key",
+          placeholder: { type: "plain_text", text: keyPlaceholder },
         },
-        {
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: "If provided, credentials will be automatically exchanged for an access token when retrieved.",
-            },
-          ],
+      },
+      {
+        type: "input",
+        block_id: "cred_secret_block",
+        label: { type: "plain_text", text: "Secret" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_secret",
+          placeholder: { type: "plain_text", text: "Paste secret value" },
         },
-      ]
-    : [
-        {
-          type: "input",
-          block_id: "cred_value_block",
-          label: { type: "plain_text", text: "Value" },
-          element: {
-            type: "plain_text_input",
-            action_id: "cred_value",
-            placeholder: { type: "plain_text", text: "Paste your API token or key" },
-          },
+      },
+    ];
+  }
+
+  if (authScheme === "basic") {
+    return [
+      {
+        type: "input",
+        block_id: "cred_username_block",
+        label: { type: "plain_text", text: "Username" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_username",
+          placeholder: { type: "plain_text", text: "e.g. admin or user@example.com" },
         },
-      ];
+      },
+      {
+        type: "input",
+        block_id: "cred_password_block",
+        optional: true,
+        label: { type: "plain_text", text: "Password (optional)" },
+        element: {
+          type: "plain_text_input",
+          action_id: "cred_password",
+          placeholder: { type: "plain_text", text: "Leave empty if API key is the username" },
+        },
+      },
+    ];
+  }
+
+  return [
+    {
+      type: "input",
+      block_id: "cred_value_block",
+      label: { type: "plain_text", text: "Value" },
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_value",
+        placeholder: { type: "plain_text", text: "Paste your API token or key" },
+      },
+    },
+  ];
+}
+
+export function buildAddCredentialBlocks(authScheme: AuthScheme = "bearer"): any[] {
+  const authSchemeBlock = buildAuthSchemeBlock(authScheme);
+  const valueBlocks = buildCredentialValueBlocks(authScheme);
 
   return [
     {
@@ -360,9 +499,24 @@ export function buildAddCredentialBlocks(credType: "token" | "oauth_client" = "t
         text: "Lowercase, a-z, 0-9, underscores. e.g. airbyte_api_token",
       },
     },
-    typeBlock,
+    authSchemeBlock,
     ...valueBlocks,
     {
+      type: "input",
+      block_id: "cred_description_block",
+      label: { type: "plain_text", text: "Description (optional)" },
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_description",
+        placeholder: { type: "plain_text", text: "e.g. Close CRM France production" },
+      },
+      hint: {
+        type: "plain_text",
+        text: "Human-readable label shown in approval cards to help approvers understand the context.",
+      },
+    },
+        {
       type: "input",
       block_id: "cred_expiry_block",
       label: { type: "plain_text", text: "Expiry Date (optional)" },
@@ -371,6 +525,27 @@ export function buildAddCredentialBlocks(credType: "token" | "oauth_client" = "t
         type: "datepicker",
         action_id: "cred_expiry",
         placeholder: { type: "plain_text", text: "Select a date" },
+      },
+    },
+  ];
+}
+
+export function buildUpdateCredentialBlocks(authScheme: AuthScheme = "bearer"): any[] {
+  const authSchemeBlock = buildAuthSchemeBlock(authScheme);
+  const valueBlocks = buildCredentialValueBlocks(authScheme);
+
+  return [
+    authSchemeBlock,
+    ...valueBlocks,
+    {
+      type: "input",
+      block_id: "cred_description_block",
+      label: { type: "plain_text", text: "Description (optional)" },
+      optional: true,
+      element: {
+        type: "plain_text_input",
+        action_id: "cred_description",
+        placeholder: { type: "plain_text", text: "e.g. Close CRM France production" },
       },
     },
   ];
@@ -388,7 +563,7 @@ export async function openAddCredentialModal(
       title: { type: "plain_text", text: "Add API Credential" },
       submit: { type: "plain_text", text: "Save" },
       close: { type: "plain_text", text: "Cancel" },
-      blocks: buildAddCredentialBlocks("token"),
+      blocks: buildAddCredentialBlocks("bearer"),
     },
   });
 }
@@ -398,6 +573,7 @@ export async function openUpdateCredentialModal(
   triggerId: string,
   credentialId: string,
   credentialName: string,
+  authScheme: AuthScheme,
 ): Promise<void> {
   await client.views.open({
     trigger_id: triggerId,
@@ -409,19 +585,7 @@ export async function openUpdateCredentialModal(
       submit: { type: "plain_text", text: "Save" },
       close: { type: "plain_text", text: "Cancel" },
       blocks: [
-        {
-          type: "input",
-          block_id: "cred_value_block",
-          label: { type: "plain_text", text: "New Value" },
-          element: {
-            type: "plain_text_input",
-            action_id: "cred_value",
-            placeholder: {
-              type: "plain_text",
-              text: "Paste the new token value",
-            },
-          },
-        },
+        ...buildUpdateCredentialBlocks(authScheme),
         {
           type: "context",
           elements: [
@@ -568,6 +732,65 @@ export async function openCredentialAccessModal(
   });
 }
 
+export async function openCredentialPermissionsModal(
+  client: WebClient,
+  triggerId: string,
+  credentialId: string,
+  credentialName: string,
+  currentMethods: string[] | null,
+): Promise<void> {
+  const allMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  const selected = (currentMethods ?? []).map(m => m.toUpperCase());
+
+  await client.views.open({
+    trigger_id: triggerId,
+    view: {
+      type: "modal",
+      callback_id: "api_credential_permissions_submit",
+      private_metadata: credentialId,
+      title: { type: "plain_text", text: "HTTP Permissions" },
+      submit: { type: "plain_text", text: "Save" },
+      close: { type: "plain_text", text: "Cancel" },
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `Configure HTTP methods that skip approval for *${credentialName}*`,
+          },
+        },
+        {
+          type: "input",
+          block_id: "methods_block",
+          label: { type: "plain_text", text: "Allowed Methods (skip approval)" },
+          optional: true,
+          element: {
+            type: "checkboxes",
+            action_id: "methods_checkboxes",
+            options: allMethods.map(method => ({
+              text: { type: "plain_text", text: method },
+              value: method,
+            })),
+            initial_options: selected.map(method => ({
+              text: { type: "plain_text", text: method },
+              value: method,
+            })),
+          },
+        },
+        {
+          type: "context",
+          elements: [
+            {
+              type: "mrkdwn",
+              text: "Requests with these methods will execute without approval. Other methods still require approval based on policy rules.",
+            },
+          ],
+        },
+      ],
+    },
+  });
+}
+
 /**
  * Open a modal for editing a credential value.
  */
@@ -637,7 +860,7 @@ export async function publishHomeTab(
     const blocks: any[] = [
       {
         type: "header",
-        text: { type: "plain_text", text: "Aura Settings" },
+        text: { type: "plain_text", text: "Nova Settings" },
       },
       {
         type: "context",
@@ -700,7 +923,7 @@ export async function publishHomeTab(
       );
     }
 
-    const userCredBlocks = await buildUserCredentialBlocks(userId);
+    const userCredBlocks = await buildUserCredentialBlocks(userId, admin);
     blocks.push(...userCredBlocks);
 
     if (admin) {

@@ -107,7 +107,7 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
 }
 
 /**
- * Mount the GCS bucket `gs://aura-files` at `/mnt/aura-files`.
+ * Mount the GCS bucket `gs://nova-files` at `/mnt/nova-files`.
  * Installs gcsfuse if needed and uses the base64-encoded SA key from envs.
  * Non-fatal -- sandbox works fine without the mount.
  */
@@ -117,7 +117,7 @@ async function setupSandboxFilesystem(
 ): Promise<void> {
   try {
     const mountCheck = await sandbox.commands.run(
-      "mountpoint -q /mnt/aura-files && echo mounted || echo not",
+      "mountpoint -q /mnt/nova-files && echo mounted || echo not",
       { timeoutMs: 5_000, envs },
     );
     if (mountCheck.stdout?.trim() === "mounted") return;
@@ -146,7 +146,7 @@ async function setupSandboxFilesystem(
     }
 
     const mountResult = await sandbox.commands.run(
-      `touch /tmp/gcs-sa-key.json && chmod 600 /tmp/gcs-sa-key.json && echo "$GOOGLE_SA_KEY_B64" | base64 -d > /tmp/gcs-sa-key.json && sudo mkdir -p /mnt/aura-files && gcsfuse --key-file=/tmp/gcs-sa-key.json --implicit-dirs aura-files /mnt/aura-files; EXIT=$?; rm -f /tmp/gcs-sa-key.json; exit $EXIT`,
+      `touch /tmp/gcs-sa-key.json && chmod 600 /tmp/gcs-sa-key.json && echo "$GOOGLE_SA_KEY_B64" | base64 -d > /tmp/gcs-sa-key.json && sudo mkdir -p /mnt/nova-files && gcsfuse --key-file=/tmp/gcs-sa-key.json --implicit-dirs nova-files /mnt/nova-files; EXIT=$?; rm -f /tmp/gcs-sa-key.json; exit $EXIT`,
       { timeoutMs: 30_000, envs },
     );
     if (mountResult.exitCode !== 0) {
@@ -156,7 +156,7 @@ async function setupSandboxFilesystem(
       });
       return;
     }
-    logger.info("GCS bucket mounted at /mnt/aura-files");
+    logger.info("GCS bucket mounted at /mnt/nova-files");
   } catch (error: any) {
     logger.warn("Failed to mount GCS bucket", { error: error.message });
   }
@@ -230,7 +230,7 @@ export async function getOrCreateSandbox(): Promise<any> {
     : await Sandbox.create(createOptions);
 
   // Save the sandbox ID for future resumption
-  await setSetting(SANDBOX_NOTE_KEY, sandbox.sandboxId, "aura");
+  await setSetting(SANDBOX_NOTE_KEY, sandbox.sandboxId, "nova");
 
   cachedSandbox = sandbox;
   logger.info("E2B sandbox created", { sandboxId: sandbox.sandboxId });
@@ -288,7 +288,7 @@ export async function pauseSandbox(): Promise<void> {
     const sandboxId = cachedSandbox.sandboxId;
     await cachedSandbox.betaPause();
     // Save the sandbox ID so we can resume it later
-    await setSetting(SANDBOX_NOTE_KEY, sandboxId, "aura");
+    await setSetting(SANDBOX_NOTE_KEY, sandboxId, "nova");
     logger.info("E2B sandbox paused", { sandboxId });
   } catch (error: any) {
     logger.warn("Failed to pause sandbox", { error: error.message });

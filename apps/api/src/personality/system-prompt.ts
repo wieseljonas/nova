@@ -40,10 +40,10 @@ interface SystemPromptContext {
 }
 
 /**
- * Aura's base personality — the soul of the system.
+ * Nova's base personality — the soul of the system.
  * Version-controlled. Changes are deliberate.
  */
-const PERSONALITY = `You are Aura -- a team member, not a tool. You exist as a single, shared colleague that everyone on the team knows and interacts with. You remember every conversation you've ever had with anyone on the team.
+const PERSONALITY = `You are Nova -- a team member, not a tool. You exist as a single, shared colleague that everyone on the team knows and interacts with. You remember every conversation you've ever had with anyone on the team.
 
 ## Core drive
 
@@ -168,7 +168,7 @@ Understanding this helps you set realistic expectations, debug failures, and rea
 
 **Heartbeat:** Every 30 minutes. One-shots fire at scheduled time. Recurring jobs evaluate cron + frequency limits. Each execution gets up to 350 tool calls. Scheduling granularity is ~30 minutes. Failed jobs retry 3x with 30-min backoff, then escalate via DM.
 
-**Codebase:** Your source is at github.com/AuraHQ-ai/aura. You have Claude Code (\`claude\`) in your sandbox for exploration, review, and code changes. Always create PRs on branches, never push to main. For prompt changes, flag as "self-edit" and explain reasoning.
+**Codebase:** Your source is at github.com/wieseljonas/nova (forked from AuraHQ-ai/aura). You have Claude Code (\`claude\`) in your sandbox for exploration, review, and code changes. Always create PRs on branches, never push to main. For prompt changes, flag as "self-edit" and explain reasoning.
 
 **Limits:** You can't access authenticated external APIs directly from runtime. But you can run code, shell commands, and CLI tools in the sandbox, and search the web / read URLs.
 
@@ -184,7 +184,7 @@ You have tools for Slack, email, calendar, BigQuery, notes, jobs, web, sandbox, 
 **Channel access:**
 - You must join a channel before reading or posting. Use join_channel first.
 - list_channels only shows channels you've already joined -- many public channels exist beyond that list.
-- Private channels require someone to \`/invite @Aura\`. You can only self-join public channels.
+- Private channels require someone to \`/invite @Nova\`. You can only self-join public channels.
 - You can only edit or delete your own messages.
 
 **DM privacy:**
@@ -316,8 +316,11 @@ function formatUserProfile(profile: UserProfile, interlocutor?: PersonProfile): 
   if (facts) {
     if (facts.role) parts.push(`Role: ${facts.role}`);
     if (facts.team) parts.push(`Team: ${facts.team}`);
+    if (facts.interests && facts.interests.length > 0) {
+      parts.push(`Interests: ${facts.interests.join(", ")}`);
+    }
     if (facts.personalDetails && facts.personalDetails.length > 0) {
-      parts.push(`Personal: ${facts.personalDetails.slice(-10).join("; ")}`);
+      parts.push(`Personal: ${facts.personalDetails.join("; ")}`);
     }
   }
 
@@ -351,40 +354,24 @@ function formatMentionedPeople(people: PersonProfile[]): string {
 function formatConversations(conversations: ConversationThread[]): string {
   if (conversations.length === 0) return "";
 
-  const MAX_THREAD_MESSAGES = 20;
-  const MAX_TOTAL_CHARS = 12_000;
-
-  let totalChars = 0;
+  const MAX_THREAD_MESSAGES = 50;
 
   const formatted = conversations
     .map((thread) => {
-      const humanMsgs = thread.messages.filter((m) => m.role !== "tool");
+      const allMsgs = thread.messages;
       const capped =
-        humanMsgs.length <= MAX_THREAD_MESSAGES
-          ? humanMsgs
-          : [humanMsgs[0], ...humanMsgs.slice(-MAX_THREAD_MESSAGES + 1)];
+        allMsgs.length <= MAX_THREAD_MESSAGES
+          ? allMsgs
+          : [allMsgs[0], ...allMsgs.slice(-MAX_THREAD_MESSAGES + 1)];
       const msgs = capped
         .map((m) => {
           const timeAgo = relativeTime(new Date(m.createdAt));
-          const speaker = m.role === "assistant" ? "Aura" : m.userId;
-          const content = m.content.length > 500 ? m.content.substring(0, 500) + "…" : m.content;
-          return `  ${speaker} (${timeAgo}): ${content}`;
+          const speaker = m.role === "assistant" ? "Nova" : m.userId;
+          return `  ${speaker} (${timeAgo}): ${m.content.length > 800 ? m.content.substring(0, 800) + "…" : m.content}`;
         })
         .join("\n");
-      const threadBlock = `Thread in ${thread.channelId} (similarity: ${thread.bestSimilarity.toFixed(2)}):\n${msgs}`;
-
-      if (totalChars + threadBlock.length > MAX_TOTAL_CHARS) {
-        if (totalChars === 0) {
-          const truncated = threadBlock.substring(0, MAX_TOTAL_CHARS);
-          totalChars += truncated.length;
-          return truncated + "\n  [truncated]";
-        }
-        return null;
-      }
-      totalChars += threadBlock.length;
-      return threadBlock;
+      return `Thread in ${thread.channelId} (similarity: ${thread.bestSimilarity.toFixed(2)}):\n${msgs}`;
     })
-    .filter(Boolean)
     .join("\n\n");
 
   return `\n## Relevant past conversations\n\nThese are past conversation threads retrieved from your message history. Use them for context if relevant — reference specific things people said.\n\n${formatted}`;
@@ -398,16 +385,30 @@ export interface SystemPromptLayers {
 }
 
 /**
- * Build the stable prefix shared by both interactive and job execution paths.
+ * Build the system prompt split into two cached layers.
  *
- * Returns: PERSONALITY + self-directive + notes-index + skill-index.
- * Async because it queries notes and skills from the database.
+ * Layer 1 (stablePrefix): content that is identical across all requests —
+ * personality, self-directive, notes-index, and skill index. Cached globally.
+ *
+ * Layer 2 (conversationContext): content that varies per conversation thread —
+ * channel context, user profile, memories, past conversations, thread context.
+ * Cached per-thread.
+ *
+ * Async because it queries the skill index and notes from the database.
  */
-export async function buildStablePrefix(): Promise<string> {
-  const parts: string[] = [];
+export async function buildSystemPrompt(
+  context: SystemPromptContext,
+): Promise<SystemPromptLayers> {
+  const stableParts: string[] = [];
+  const conversationParts: string[] = [];
 
-  parts.push(PERSONALITY);
+  // ── Layer 1: Stable prefix ──────────────────────────────────────────
 
+  // Core personality (always present)
+  stableParts.push(PERSONALITY);
+
+  // Self-directive: agent's own persistent context, loaded every invocation
+  // Hard cap at ~2000 tokens (~8000 chars) to prevent context-window overflow
   const SELF_DIRECTIVE_MAX_CHARS = 8000;
   try {
     const rows = await db
@@ -426,7 +427,7 @@ export async function buildStablePrefix(): Promise<string> {
           limit: SELF_DIRECTIVE_MAX_CHARS,
         });
       }
-      parts.push(
+      stableParts.push(
         `\n## Self-directive\n\nYou wrote and maintain this yourself. It persists across all invocations.\n\n${content}`,
       );
     }
@@ -434,6 +435,7 @@ export async function buildStablePrefix(): Promise<string> {
     logger.warn("Failed to load self-directive note", { error });
   }
 
+  // Notes index: table of contents of all knowledge, loaded every invocation
   const NOTES_INDEX_MAX_CHARS = 16000;
   try {
     const indexRows = await db
@@ -452,7 +454,7 @@ export async function buildStablePrefix(): Promise<string> {
           limit: NOTES_INDEX_MAX_CHARS,
         });
       }
-      parts.push(
+      stableParts.push(
         `\n## Notes index\n\nMaster index of all your notes. Use read_note() to load full content, search_notes() to grep across all notes.\n\n${indexContent}`,
       );
     }
@@ -460,27 +462,11 @@ export async function buildStablePrefix(): Promise<string> {
     logger.warn("Failed to load notes-index note", { error });
   }
 
+  // Skill index (progressive disclosure -- lightweight topic + first line)
   const skillIndex = await buildSkillIndex();
   if (skillIndex) {
-    parts.push(skillIndex);
+    stableParts.push(skillIndex);
   }
-
-  return parts.join("\n\n");
-}
-
-/**
- * Build the full interactive system prompt split into two cached layers.
- *
- * Layer 1 (stablePrefix): identical across all requests (via buildStablePrefix).
- * Layer 2 (conversationContext): varies per conversation thread.
- */
-export async function buildSystemPrompt(
-  context: SystemPromptContext,
-): Promise<SystemPromptLayers> {
-  const conversationParts: string[] = [];
-
-  // ── Layer 1: Stable prefix ──────────────────────────────────────────
-  const stablePrefix = await buildStablePrefix();
 
   // ── Layer 2: Conversation context ───────────────────────────────────
 
@@ -523,7 +509,7 @@ export async function buildSystemPrompt(
   }
 
   return {
-    stablePrefix,
+    stablePrefix: stableParts.join("\n\n"),
     conversationContext: conversationParts.join("\n\n"),
   };
 }
