@@ -1,6 +1,6 @@
 {
   "installCommand": "npm install",
-  "buildCommand": "tsc & P1=$!; tsx src/db/migrate.ts & P2=$!; wait $P1; R1=$?; wait $P2; R2=$?; [ $R1 -eq 0 ] && [ $R2 -eq 0 ]",
+  "buildCommand": "tsc & P1=$!; tsx src/db/migrate.ts & P2=$!; wait $P1; E1=$?; wait $P2; E2=$?; [ $E1 -eq 0 ] && [ $E2 -eq 0 ]",
   "framework": null,
   "regions": [
     "fra1"
@@ -31,8 +31,7 @@
     },
     {
       "path": "/api/cron/heartbeat",
-      "schedule": "*/30 * * * *"
+      "schedule": "*/10 * * * *"
     }
-  ],
-  "buildCommand": "tsc & P1=$!; tsx src/db/migrate.ts & P2=$!; wait $P1; E1=$?; wait $P2; E2=$?; [ $E1 -eq 0 ] && [ $E2 -eq 0 ]"
+  ]
 }
