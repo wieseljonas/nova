@@ -37,7 +37,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
   const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState("token");
+  const [newType, setNewType] = useState("bearer");
   const [newValue, setNewValue] = useState("");
   const [newOwnerId, setNewOwnerId] = useState("");
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
@@ -65,7 +65,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
     });
     setShowCreate(false);
     setNewName("");
-    setNewType("token");
+    setNewType("bearer");
     setNewValue("");
     setNewOwnerId("");
     router.refresh();
@@ -106,7 +106,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
                   {cred.name}
                 </Link>
               </TableCell>
-              <TableCell><Badge variant="secondary">{cred.type}</Badge></TableCell>
+              <TableCell><Badge variant="secondary">{cred.type === "bearer" ? "token" : cred.type}</Badge></TableCell>
               <TableCell className="text-sm">{cred.ownerName}</TableCell>
               <TableCell>{cred.grantCount}</TableCell>
               <TableCell className="text-muted-foreground text-sm">{formatDate(cred.expiresAt)}</TableCell>
@@ -135,7 +135,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
             onChange={(e) => setNewType(e.target.value)}
             className="h-8 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px]"
           >
-            <option value="token">Token</option>
+            <option value="bearer">Bearer Token</option>
             <option value="oauth_client">OAuth Client</option>
           </select>
           <Input placeholder="Owner Slack User ID" value={newOwnerId} onChange={(e) => setNewOwnerId(e.target.value)} />

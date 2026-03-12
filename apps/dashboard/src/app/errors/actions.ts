@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { errorEvents } from "@schema";
 import { eq, desc, inArray, ilike, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSession } from "@/lib/auth";
 
 export async function getErrors(resolved?: string, search?: string, page = 1, limit = 100) {
   const offset = (page - 1) * limit;
@@ -37,6 +38,9 @@ export async function getError(id: string) {
 }
 
 export async function resolveErrors(ids: string[]) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   if (ids.length === 0) return;
   await db
     .update(errorEvents)

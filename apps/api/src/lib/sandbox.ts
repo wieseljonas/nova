@@ -82,6 +82,13 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
     envs.GOOGLE_SA_KEY_B64 = saKeyB64;
   }
 
+  const RESERVED_ENV_NAMES = new Set([
+    "PATH", "HOME", "USER", "SHELL", "TERM", "PWD", "OLDPWD", "LANG", "LC_ALL",
+    "LD_LIBRARY_PATH", "LD_PRELOAD", "NODE_OPTIONS", "NODE_PATH", "GOOGLE_SA_KEY_B64",
+    "GITHUB_TOKEN", "GH_TOKEN", "ANTHROPIC_API_KEY", "DATABASE_URL", "VERCEL_TOKEN",
+    "OPENAI_API_KEY", "E2B_API_KEY", "TMPDIR", "TMP", "TEMP",
+  ]);
+
   try {
     const rows = await db
       .select({ sandboxEnvName: credentials.sandboxEnvName, value: credentials.value })
@@ -89,6 +96,12 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
       .where(isNotNull(credentials.sandboxEnvName));
     for (const row of rows) {
       if (row.sandboxEnvName) {
+        if (RESERVED_ENV_NAMES.has(row.sandboxEnvName)) {
+          logger.warn("Skipping reserved env name in credential sandbox injection", {
+            envName: row.sandboxEnvName,
+          });
+          continue;
+        }
         try {
           envs[row.sandboxEnvName] = decryptCredential(row.value);
         } catch (e: any) {

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { notes } from "@schema";
 import { eq, desc, ilike, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSession } from "@/lib/auth";
 
 export async function getNotes(search?: string, category?: string, page = 1, limit = 100) {
   const offset = (page - 1) * limit;
@@ -36,6 +37,9 @@ export async function getNote(id: string) {
 }
 
 export async function createNote(data: { topic: string; content: string; category: string; expiresAt?: string }) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   const [note] = await db
     .insert(notes)
     .values({
@@ -50,6 +54,9 @@ export async function createNote(data: { topic: string; content: string; categor
 }
 
 export async function updateNote(id: string, data: { topic?: string; content?: string; category?: string; expiresAt?: string | null }) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   const values: Record<string, unknown> = { updatedAt: new Date() };
   if (data.topic !== undefined) values.topic = data.topic;
   if (data.content !== undefined) values.content = data.content;
@@ -62,6 +69,9 @@ export async function updateNote(id: string, data: { topic?: string; content?: s
 }
 
 export async function deleteNote(id: string) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   await db.delete(notes).where(eq(notes.id, id));
   revalidatePath("/notes");
 }

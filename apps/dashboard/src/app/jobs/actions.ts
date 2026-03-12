@@ -5,6 +5,7 @@ import { jobs, jobExecutions, conversationTraces } from "@schema";
 import { eq, desc, ilike, sql } from "drizzle-orm";
 import { fetchConversationWithParts } from "@/lib/queries";
 import { revalidatePath } from "next/cache";
+import { getSession } from "@/lib/auth";
 
 export async function getJobs(search?: string, page = 1, limit = 100) {
   const offset = (page - 1) * limit;
@@ -67,6 +68,9 @@ export async function getExecutionWithConversation(execId: string) {
 }
 
 export async function toggleJobEnabled(id: string, enabled: boolean) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   await db
     .update(jobs)
     .set({ enabled: enabled ? 1 : 0, updatedAt: new Date() })

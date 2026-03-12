@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { memories, userProfiles } from "@schema";
 import { eq, desc, sql, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { getSession } from "@/lib/auth";
 
 const memoryCols = {
   id: memories.id,
@@ -125,6 +126,9 @@ export async function updateMemory(
   id: string,
   data: { content?: string; relevanceScore?: number; shareable?: number },
 ) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   const values: Record<string, unknown> = { updatedAt: new Date() };
   if (data.content !== undefined) values.content = data.content;
   if (data.relevanceScore !== undefined) values.relevanceScore = data.relevanceScore;
@@ -136,6 +140,9 @@ export async function updateMemory(
 }
 
 export async function deleteMemory(id: string) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   await db.delete(memories).where(eq(memories.id, id));
   revalidatePath("/memories");
 }

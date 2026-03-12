@@ -48,9 +48,10 @@ export function getWeekCalendar(date: Date, timezone: string): string {
   const parts: string[] = [];
   for (let offset = 1; offset <= 7; offset++) {
     const diff = offset - todayDow;
-    const d = new Date(date.getTime() + diff * 86_400_000);
-    const dayNum = formatInTimeZone(d, timezone, "d");
-    const dateStr = formatInTimeZone(d, timezone, "yyyy-MM-dd");
+    const baseDate = new Date(date);
+    baseDate.setDate(baseDate.getDate() + diff);
+    const dayNum = formatInTimeZone(baseDate, timezone, "d");
+    const dateStr = formatInTimeZone(baseDate, timezone, "yyyy-MM-dd");
     const label = `${dayNames[offset - 1]} ${dayNum}`;
     parts.push(dateStr === todayStr ? `*${label}*` : label);
   }

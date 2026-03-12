@@ -5,6 +5,7 @@ import { credentials, credentialGrants, credentialAuditLog, userProfiles } from 
 import { eq, desc, count, ilike, sql } from "drizzle-orm";
 import { encryptCredential, decryptCredential, maskCredential } from "@/lib/credentials";
 import { revalidatePath } from "next/cache";
+import { getSession } from "@/lib/auth";
 
 export async function getCredentials(search?: string, page = 1, limit = 100) {
   const offset = (page - 1) * limit;
@@ -19,7 +20,7 @@ export async function getCredentials(search?: string, page = 1, limit = 100) {
     .select({
       id: credentials.id,
       name: credentials.name,
-      type: credentials.type,
+      type: credentials.authScheme,
       ownerId: credentials.ownerId,
       expiresAt: credentials.expiresAt,
       createdAt: credentials.createdAt,
@@ -107,16 +108,19 @@ export async function createCredential(data: {
   expiresAt?: string;
   tokenUrl?: string;
 }) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
+  const authScheme = data.type === "token" ? "bearer" : data.type;
   const encrypted = encryptCredential(data.value);
   const [cred] = await db
     .insert(credentials)
     .values({
       name: data.name,
-      type: data.type,
+      authScheme: authScheme,
       ownerId: data.ownerId,
       value: encrypted,
       expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
-      tokenUrl: data.tokenUrl || null,
     })
     .returning();
   revalidatePath("/credentials");
@@ -124,6 +128,9 @@ export async function createCredential(data: {
 }
 
 export async function updateCredentialValue(id: string, value: string) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   const encrypted = encryptCredential(value);
   await db
     .update(credentials)
@@ -133,6 +140,9 @@ export async function updateCredentialValue(id: string, value: string) {
 }
 
 export async function grantCredentialAccess(credentialId: string, granteeId: string, permission: string, grantedBy: string) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   await db
     .insert(credentialGrants)
     .values({ credentialId, granteeId, permission, grantedBy })
@@ -144,6 +154,9 @@ export async function grantCredentialAccess(credentialId: string, granteeId: str
 }
 
 export async function revokeCredentialAccess(grantId: string, credentialId: string) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   await db
     .update(credentialGrants)
     .set({ revokedAt: new Date() })
@@ -152,6 +165,9 @@ export async function revokeCredentialAccess(grantId: string, credentialId: stri
 }
 
 export async function deleteCredential(id: string) {
+  const session = await getSession();
+  if (!session) throw new Error("Unauthorized");
+  
   await db.delete(credentials).where(eq(credentials.id, id));
   revalidatePath("/credentials");
 }
