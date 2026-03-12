@@ -154,6 +154,14 @@ function truncateValue(v: string, max = 200): string {
   return v.length <= max ? v : `${v.slice(0, max)}...`;
 }
 
+/**
+ * Sanitize text for safe inclusion in Slack mrkdwn.
+ * Escapes `<` and `>` to prevent unintended mentions, channels, or special sequences.
+ */
+function sanitizeSlackText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 // ── Risk Tier Colors ────────────────────────────────────────────────────────
 
 const RISK_COLORS: Record<string, string> = {
@@ -347,14 +355,14 @@ export async function requestApproval(args: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*🔒 ${summary.title}*`,
+        text: `*🔒 ${sanitizeSlackText(summary.title)}*`,
       },
     },
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: summary.body,
+        text: sanitizeSlackText(summary.body),
       },
     },
     {
@@ -532,14 +540,14 @@ export async function updateApprovalCard(args: {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${titleText}*`,
+        text: `*${sanitizeSlackText(titleText)}*`,
       },
     },
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: body,
+        text: sanitizeSlackText(body),
       },
     },
     {

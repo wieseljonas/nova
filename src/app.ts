@@ -638,42 +638,6 @@ app.post("/api/slack/interactions", async (c) => {
       if (action.action_id?.startsWith("governance_approve_")) {
         const actionLogId = action.action_id.replace("governance_approve_", "");
 
-        // Immediately update the approval message to show "executing" state
-        const messageTs = payload.message?.ts;
-        const channelId = payload.channel?.id;
-        if (messageTs && channelId) {
-          // Extract blocks from attachments (new format) or top-level blocks (old format)
-          const attachments = payload.message?.attachments as any[] | undefined;
-          const originalBlocks = attachments?.[0]?.blocks ?? (payload.message?.blocks ?? []) as any[];
-          const originalColor = attachments?.[0]?.color;
-          // Remove the actions block (buttons) and update context to show executing
-          const updatedBlocks = originalBlocks
-            .filter((b: any) => b.type !== "actions")
-            .map((b: any) => {
-              if (b.type === "context") {
-                return {
-                  type: "context",
-                  elements: [{
-                    type: "mrkdwn",
-                    text: `:hourglass_flowing_sand: Approved by <@${userId}> -- executing now...`,
-                  }],
-                };
-              }
-              return b;
-            });
-          const updatePayload: any = {
-            channel: channelId,
-            ts: messageTs,
-            text: `Approved by <@${userId}> -- executing...`,
-          };
-          if (attachments?.length) {
-            updatePayload.attachments = [{ color: originalColor ?? "#2eb67d", blocks: updatedBlocks }];
-          } else {
-            updatePayload.blocks = updatedBlocks;
-          }
-          waitUntil(slackClient.chat.update(updatePayload).catch((err: any) => logger.warn("Failed to update approval message", { err })));
-        }
-
         const approvePromise = (async () => {
           try {
             const { handleApprovalReaction } = await import("./lib/approval.js");
@@ -701,39 +665,6 @@ app.post("/api/slack/interactions", async (c) => {
 
       if (action.action_id?.startsWith("governance_reject_")) {
         const actionLogId = action.action_id.replace("governance_reject_", "");
-
-        // Immediately update the approval message to show rejected state
-        const rejectMessageTs = payload.message?.ts;
-        const rejectChannelId = payload.channel?.id;
-        if (rejectMessageTs && rejectChannelId) {
-          const rejectAttachments = payload.message?.attachments as any[] | undefined;
-          const rejectOrigBlocks = rejectAttachments?.[0]?.blocks ?? (payload.message?.blocks ?? []) as any[];
-          const updatedBlocks = rejectOrigBlocks
-            .filter((b: any) => b.type !== "actions")
-            .map((b: any) => {
-              if (b.type === "context") {
-                return {
-                  type: "context",
-                  elements: [{
-                    type: "mrkdwn",
-                    text: `:x: Rejected by <@${userId}>`,
-                  }],
-                };
-              }
-              return b;
-            });
-          const rejectPayload: any = {
-            channel: rejectChannelId,
-            ts: rejectMessageTs,
-            text: `Rejected by <@${userId}>`,
-          };
-          if (rejectAttachments?.length) {
-            rejectPayload.attachments = [{ color: "#e01e5a", blocks: updatedBlocks }];
-          } else {
-            rejectPayload.blocks = updatedBlocks;
-          }
-          waitUntil(slackClient.chat.update(rejectPayload).catch((err: any) => logger.warn("Failed to update rejection message", { err })));
-        }
 
         const rejectPromise = (async () => {
           try {
@@ -800,6 +731,23 @@ app.post("/api/slack/interactions", async (c) => {
           try {
             if (!isAdmin(userId)) {
               logger.warn("View raw: non-admin attempted access", { userId, actionLogId });
+              await slackClient.views.open({
+                trigger_id: payload.trigger_id,
+                view: {
+                  type: "modal",
+                  title: { type: "plain_text", text: "Access Denied" },
+                  close: { type: "plain_text", text: "Close" },
+                  blocks: [
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: "⛔ Only admins can view raw parameters.\n\nUse the \"View more\" button to see action details.",
+                      },
+                    },
+                  ],
+                },
+              });
               return;
             }
 
