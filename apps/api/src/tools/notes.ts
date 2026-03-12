@@ -158,7 +158,7 @@ export function createNoteTools(context?: ScheduleContext) {
           return { ok: false, error: `Failed to save note: ${error.message}` };
         }
       },
-      slack: { status: "Saving note...", detail: (i) => i.topic },
+      slack: { status: "Saving note...", detail: (i) => i.topic, output: (r) => r.ok === false ? r.error : 'Note saved' },
     }),
 
     read_note: defineTool({
@@ -199,7 +199,7 @@ export function createNoteTools(context?: ScheduleContext) {
           return { ok: false, error: `Failed to read note: ${error.message}` };
         }
       },
-      slack: { status: "Reading note...", detail: (i) => i.topic },
+      slack: { status: "Reading note...", detail: (i) => i.topic, output: (r) => r.ok === false ? r.error : `${r.line_count} lines` },
     }),
 
     list_notes: defineTool({
@@ -263,7 +263,7 @@ export function createNoteTools(context?: ScheduleContext) {
           return { ok: false, error: `Failed to list notes: ${error.message}` };
         }
       },
-      slack: { status: "Listing notes..." },
+      slack: { status: "Listing notes...", output: (r) => r.ok === false ? r.error : `${r.count} notes` },
     }),
 
     edit_note: defineTool({
@@ -414,7 +414,7 @@ export function createNoteTools(context?: ScheduleContext) {
           return { ok: false, error: `Failed to edit note: ${error.message}` };
         }
       },
-      slack: { status: "Editing note...", detail: (i) => i.topic },
+      slack: { status: "Editing note...", detail: (i) => i.topic, output: (r) => r.ok === false ? r.error : 'Note edited' },
     }),
 
     delete_note: defineTool({
@@ -459,7 +459,7 @@ export function createNoteTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Deleting note...", detail: (i) => i.topic },
+      slack: { status: "Deleting note...", detail: (i) => i.topic, output: (r) => r.ok === false ? r.error : 'Note deleted' },
     }),
 
     // ── Full-text Search ────────────────────────────────────────────────────
@@ -593,7 +593,7 @@ export function createNoteTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Searching notes...", detail: (i) => i.query },
+      slack: { status: "Searching notes...", detail: (i) => i.query, output: (r) => r.ok === false ? r.error : `${r.count} results` },
     }),
 
     // ── Plan Continuation ──────────────────────────────────────────────────
@@ -768,7 +768,7 @@ export function createNoteTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Saving checkpoint...", detail: (i) => i.topic },
+      slack: { status: "Saving checkpoint...", detail: (i) => i.topic, output: (r) => r.ok === false ? r.error : 'Checkpoint saved' },
     }),
   };
 }

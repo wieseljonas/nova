@@ -889,7 +889,7 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
           };
         }
       },
-      slack: { status: "Reading channel...", detail: (i) => i.channel, output: (r) => r.ok === false ? r.error : `${r.messages?.length ?? 0} messages` },
+      slack: { status: "Reading channel...", detail: (i) => i.channel, output: (r) => r.ok === false ? r.error : `${r.messages?.length ?? 0} messages from #${r.channel}` },
     }),
 
     read_thread_replies: defineTool({
@@ -1296,7 +1296,7 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
           };
         }
       },
-      slack: { status: "Searching messages...", detail: (i) => i.query, output: (r) => r.ok === false ? r.error : `${r.results?.length ?? 0} results` },
+      slack: { status: "Searching messages...", detail: (i) => i.query, output: (r) => r.ok === false ? r.error : `${r.results?.length ?? 0} results for '${r.query?.slice(0, 40)}'` },
     }),
 
     send_direct_message: defineTool({

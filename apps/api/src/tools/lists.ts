@@ -68,7 +68,7 @@ export function createListWriteTools(client: WebClient) {
           };
         }
       },
-      slack: { status: "Creating list item..." },
+      slack: { status: "Creating list item...", output: (r) => r.ok === false ? r.error : 'Item created' },
     }),
 
     update_slack_list_item: defineTool({
@@ -194,7 +194,7 @@ export function createListWriteTools(client: WebClient) {
           };
         }
       },
-      slack: { status: "Updating list item..." },
+      slack: { status: "Updating list item...", output: (r) => r.ok === false ? r.error : 'Item updated' },
     }),
 
     delete_slack_list_item: defineTool({
@@ -237,7 +237,7 @@ export function createListWriteTools(client: WebClient) {
           };
         }
       },
-      slack: { status: "Deleting list item..." },
+      slack: { status: "Deleting list item...", output: (r) => r.ok === false ? r.error : 'Item deleted' },
     }),
   };
 }

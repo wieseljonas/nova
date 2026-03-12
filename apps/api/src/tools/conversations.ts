@@ -383,6 +383,7 @@ export function createConversationSearchTools(context?: ScheduleContext) {
       slack: {
         status: "Searching conversations...",
         detail: (i) => i.query,
+        output: (r) => r.ok === false ? r.error : `${r.message_count ?? 0} messages in ${r.thread_count ?? 0} threads`,
       },
     }),
   };
