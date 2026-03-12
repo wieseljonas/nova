@@ -118,6 +118,7 @@ export async function storeApiCredential(
   plaintext: string,
   expiresAt?: Date,
   authScheme: AuthScheme = "bearer",
+  description?: string,
 ): Promise<Credential> {
   validateKey();
   validateName(name);
@@ -188,6 +189,7 @@ export async function storeApiCredential(
       authScheme,
       value: encrypted,
       expiresAt: expiresAt ?? null,
+      description: description ?? null,
     })
     .onConflictDoUpdate({
       target: [credentials.ownerId, credentials.name],
@@ -195,6 +197,7 @@ export async function storeApiCredential(
         value: encrypted,
         authScheme,
         expiresAt: expiresAt ?? null,
+        description: description ?? null,
         updatedAt: new Date(),
       },
     })

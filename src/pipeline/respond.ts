@@ -819,7 +819,7 @@ export async function generateResponse(
                     approvalToolName,
                     approvalInput as Record<string, unknown>,
                   ),
-                  status: "pending",
+                  status: "in_progress",
                   ...(details && { details }),
                 }],
               };

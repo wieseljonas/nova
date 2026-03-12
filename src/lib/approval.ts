@@ -9,6 +9,8 @@ import {
   type ScheduleContext,
 } from "../db/schema.js";
 import { logger } from "./logger.js";
+import { generateText } from "ai";
+import { getMainModel } from "./ai.js";
 
 export type { ApprovalPolicy };
 
@@ -184,6 +186,67 @@ function summarizeToolParams(toolName: string, params: unknown): string {
   return lines.join("\n");
 }
 
+// ── LLM-Generated Approval Summary ──────────────────────────────────────────
+
+/**
+ * Generate a human-readable approval summary using the LLM.
+ * Returns a compact title + body for the card, plus a full explanation for the modal.
+ */
+async function generateApprovalSummary(args: {
+  toolName: string;
+  params: unknown;
+  riskTier: string;
+}): Promise<{ title: string; body: string; fullExplanation: string }> {
+  const { toolName, params, riskTier } = args;
+
+  try {
+    const { model } = await getMainModel();
+    
+    const prompt = `You are helping a human understand what an AI agent is requesting approval to do.
+
+Tool: ${toolName}
+Risk tier: ${riskTier}
+Parameters: ${JSON.stringify(params, null, 2)}
+
+Generate a human-readable summary with:
+1. A short title (5-10 words max) - what action is being requested
+2. A body (1-2 sentences) - key details the approver needs to know
+3. A full explanation (2-3 paragraphs) - complete context including why this might need approval, what the parameters mean, and potential impact
+
+Format as JSON:
+{
+  "title": "...",
+  "body": "...",
+  "fullExplanation": "..."
+}`;
+
+    const result = await generateText({
+      model,
+      prompt,
+      temperature: 0.3,
+    });
+
+    const parsed = JSON.parse(result.text);
+    return {
+      title: parsed.title || `Approval: ${toolName}`,
+      body: parsed.body || "Review the parameters before approving.",
+      fullExplanation: parsed.fullExplanation || result.text,
+    };
+  } catch (error) {
+    logger.warn("Failed to generate LLM approval summary, using fallback", {
+      toolName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    
+    // Fallback to basic summary
+    return {
+      title: `Approval: ${toolName}`,
+      body: `Risk tier: ${riskTier}. Review parameters before approving.`,
+      fullExplanation: `This request requires approval because it's classified as ${riskTier} risk.\n\nTool: ${toolName}\n\nParameters:\n${JSON.stringify(params, null, 2)}`,
+    };
+  }
+}
+
 // ── Request Approval (post Slack message + write action_log row) ────────────
 
 export async function requestApproval(args: {
@@ -209,6 +272,19 @@ export async function requestApproval(args: {
     throw new Error(`action_log row ${actionLogId} not found`);
   }
 
+  // Generate LLM summary
+  const summary = await generateApprovalSummary({
+    toolName,
+    params: logEntry.params ?? params,
+    riskTier,
+  });
+
+  // Store summary in action_log
+  await db
+    .update(actionLog)
+    .set({ summary })
+    .where(eq(actionLog.id, actionLogId));
+
   const channel = policy?.approvalChannel ?? undefined;
   const approvers = policy?.approverIds ?? [];
   const approverMentions =
@@ -216,28 +292,31 @@ export async function requestApproval(args: {
       ? approvers.map((id) => `<@${id}>`).join(", ")
       : "admins";
 
+  // Color based on risk tier
+  const colorMap: Record<string, string> = {
+    read: "#36A64F",        // green
+    write: "#FFB900",       // yellow
+    destructive: "#D32F2F", // red
+  };
+  const color = colorMap[riskTier] ?? "#FFB900";
+
+  // Build compact card with attachment
   const blocks = [
     {
-      type: "header" as const,
-      text: {
-        type: "plain_text" as const,
-        text: `🔒 Approval Required: ${toolName}`,
-        emoji: true,
-      },
-    },
-    {
       type: "section" as const,
       text: {
         type: "mrkdwn" as const,
-        text: `*Risk tier:* \`${riskTier}\`\n*Requested by:* <@${logEntry.triggeredBy}>\n*Trigger:* ${logEntry.triggerType}${logEntry.jobId ? `\n*Job:* ${logEntry.jobId}` : ""}`,
+        text: `*${summary.title}*\n${summary.body}`,
       },
     },
     {
-      type: "section" as const,
-      text: {
-        type: "mrkdwn" as const,
-        text: `*Request details:*\n${summarizeToolParams(toolName, logEntry.params ?? params)}`,
-      },
+      type: "context" as const,
+      elements: [
+        {
+          type: "mrkdwn" as const,
+          text: `Risk: \`${riskTier}\` • Requested by <@${logEntry.triggeredBy}>`,
+        },
+      ],
     },
     {
       type: "actions" as const,
@@ -254,6 +333,18 @@ export async function requestApproval(args: {
           text: { type: "plain_text" as const, text: "❌ Reject", emoji: true },
           style: "danger" as const,
           action_id: `governance_reject_${actionLogId}`,
+          value: actionLogId,
+        },
+        {
+          type: "button" as const,
+          text: { type: "plain_text" as const, text: "📋 View more", emoji: true },
+          action_id: `governance_view_more_${actionLogId}`,
+          value: actionLogId,
+        },
+        {
+          type: "button" as const,
+          text: { type: "plain_text" as const, text: "🔍 View raw", emoji: true },
+          action_id: `governance_view_raw_${actionLogId}`,
           value: actionLogId,
         },
       ],
@@ -285,8 +376,13 @@ export async function requestApproval(args: {
   const result = await slackClient.chat.postMessage({
     channel: targetChannel,
     ...(context.threadTs ? { thread_ts: context.threadTs } : {}),
-    text: `Approval required for ${toolName} (${riskTier})`,
-    blocks,
+    text: `🔒 Approval Required: ${summary.title}`,
+    attachments: [
+      {
+        color,
+        blocks,
+      },
+    ],
     metadata: {
       event_type: "approval_request",
       event_payload: {

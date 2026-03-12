@@ -634,6 +634,136 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(denyPromise);
       }
 
+      // ── Governance "View more" button ───────────────────────────────
+      if (action.action_id?.startsWith("governance_view_more_")) {
+        const actionLogId = action.action_id.replace("governance_view_more_", "");
+        const viewMorePromise = (async () => {
+          try {
+            const { actionLog } = await import("./db/schema.js");
+            const { db } = await import("./db/client.js");
+            const { eq } = await import("drizzle-orm");
+            
+            const rows = await db.select().from(actionLog).where(eq(actionLog.id, actionLogId)).limit(1);
+            const entry = rows[0];
+            
+            if (!entry) {
+              logger.warn("governance_view_more: action_log not found", { actionLogId });
+              return;
+            }
+
+            const summary = entry.summary as { title: string; body: string; fullExplanation: string } | null;
+            const fullExplanation = summary?.fullExplanation || "No detailed explanation available.";
+
+            await slackClient.views.open({
+              trigger_id: payload.trigger_id,
+              view: {
+                type: "modal",
+                title: { type: "plain_text", text: "Approval Details" },
+                close: { type: "plain_text", text: "Close" },
+                blocks: [
+                  {
+                    type: "header",
+                    text: { type: "plain_text", text: summary?.title || "Approval Request" },
+                  },
+                  {
+                    type: "section",
+                    text: { type: "mrkdwn", text: fullExplanation },
+                  },
+                  {
+                    type: "context",
+                    elements: [
+                      {
+                        type: "mrkdwn",
+                        text: `Tool: \`${entry.toolName}\` • Risk: \`${entry.riskTier}\` • ID: \`${actionLogId}\``,
+                      },
+                    ],
+                  },
+                ],
+              },
+            });
+          } catch (err) {
+            recordError("interactions.governance_view_more", err, { userId, actionLogId });
+            logger.error("View more modal failed", { userId, actionLogId, error: err });
+          }
+        })();
+        waitUntil(viewMorePromise);
+      }
+
+      // ── Governance "View raw" button (admin-only) ────────────────────
+      if (action.action_id?.startsWith("governance_view_raw_")) {
+        const actionLogId = action.action_id.replace("governance_view_raw_", "");
+        
+        // Check admin permission
+        if (!userId || !isAdmin(userId)) {
+          logger.warn("Non-admin attempted to view raw approval data", { userId, actionLogId });
+          const ephemeralPromise = (async () => {
+            try {
+              await slackClient.chat.postEphemeral({
+                channel: payload.channel?.id,
+                user: userId,
+                text: "⚠️ Only admins can view raw approval payloads.",
+              });
+            } catch { /* best effort */ }
+          })();
+          waitUntil(ephemeralPromise);
+          continue;
+        }
+
+        const viewRawPromise = (async () => {
+          try {
+            const { actionLog } = await import("./db/schema.js");
+            const { db } = await import("./db/client.js");
+            const { eq } = await import("drizzle-orm");
+            
+            const rows = await db.select().from(actionLog).where(eq(actionLog.id, actionLogId)).limit(1);
+            const entry = rows[0];
+            
+            if (!entry) {
+              logger.warn("governance_view_raw: action_log not found", { actionLogId });
+              return;
+            }
+
+            const rawPayload = JSON.stringify(entry.params, null, 2);
+            const truncated = rawPayload.length > 2900 ? rawPayload.slice(0, 2900) + "\n\n...(truncated)" : rawPayload;
+
+            await slackClient.views.open({
+              trigger_id: payload.trigger_id,
+              view: {
+                type: "modal",
+                title: { type: "plain_text", text: "Raw Payload" },
+                close: { type: "plain_text", text: "Close" },
+                blocks: [
+                  {
+                    type: "header",
+                    text: { type: "plain_text", text: "Developer Payload" },
+                  },
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: `\`\`\`\n${truncated}\n\`\`\``,
+                    },
+                  },
+                  {
+                    type: "context",
+                    elements: [
+                      {
+                        type: "mrkdwn",
+                        text: `Tool: \`${entry.toolName}\` • Triggered by: <@${entry.triggeredBy}> • ID: \`${actionLogId}\``,
+                      },
+                    ],
+                  },
+                ],
+              },
+            });
+          } catch (err) {
+            recordError("interactions.governance_view_raw", err, { userId, actionLogId });
+            logger.error("View raw modal failed", { userId, actionLogId, error: err });
+          }
+        })();
+        waitUntil(viewRawPromise);
+      }
+
       // ── Governance approval buttons ─────────────────────────────────
       if (action.action_id?.startsWith("governance_approve_")) {
         const actionLogId = action.action_id.replace("governance_approve_", "");
@@ -822,6 +952,7 @@ function extractCredentialValue(
     if (callbackId === "api_credential_add_submit" && userId) {
       if (!isAdmin(userId)) return c.json({});
       const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
+      const description = payload.view?.state?.values?.cred_description_block?.cred_description?.value;
       const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
       const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
         | "bearer"
@@ -838,7 +969,7 @@ function extractCredentialValue(
         const expiresAt = expiryStr ? new Date(expiryStr) : undefined;
         const addPromise = (async () => {
           try {
-            await storeApiCredential(userId, name, value, expiresAt, authScheme);
+            await storeApiCredential(userId, name, value, expiresAt, authScheme, description);
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_add", err, { userId, name });
@@ -870,6 +1001,7 @@ function extractCredentialValue(
 
     if (callbackId === "api_credential_update_submit" && userId) {
       const credentialId = payload.view?.private_metadata;
+      const description = payload.view?.state?.values?.cred_description_block?.cred_description?.value;
       const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
         | "bearer"
         | "basic"
@@ -903,6 +1035,7 @@ function extractCredentialValue(
               value,
               cred.expires_at ?? undefined,
               authScheme,
+              description,
             );
             await publishHomeTab(slackClient, userId);
           } catch (err) {
