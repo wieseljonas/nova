@@ -188,6 +188,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
       slack: {
         status: "Dispatching Cursor agent...",
         detail: (i) => i.issue_description?.slice(0, 60),
+        output: (r) => r.ok === false ? r.error : `Agent ${r.agent_id?.slice(0, 12)}… on \`${r.branch}\``,
       },
     }),
 
@@ -252,6 +253,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
       slack: {
         status: "Checking agent status...",
         detail: (i) => i.agent_id,
+        output: (r) => r.ok === false ? r.error : `${r.status}${r.pr_url ? ' — PR ready' : ''}`,
       },
     }),
 
@@ -345,7 +347,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Following up on agent..." },
+      slack: { status: "Following up on agent...", output: (r) => r.ok === false ? r.error : 'Follow-up sent' },
     }),
 
     get_cursor_conversation: defineTool({
@@ -393,7 +395,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Reading agent conversation..." },
+      slack: { status: "Reading agent conversation...", output: (r) => r.ok === false ? r.error : 'Conversation loaded' },
     }),
 
     stop_cursor_agent: defineTool({
@@ -445,7 +447,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Stopping agent..." },
+      slack: { status: "Stopping agent...", output: (r) => r.ok === false ? r.error : 'Stopped' },
     }),
 
     list_cursor_agents: defineTool({
@@ -495,7 +497,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
           };
         }
       },
-      slack: { status: "Listing agents..." },
+      slack: { status: "Listing agents...", output: (r) => r.ok === false ? r.error : `${r.agents?.length ?? 0} agents` },
     }),
   };
 }

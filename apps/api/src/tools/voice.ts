@@ -235,7 +235,7 @@ export function createVoiceTools(client: WebClient, context?: ScheduleContext): 
           return { ok: false, error: `Failed to list voice agents: ${error.message}` };
         }
       },
-      slack: { status: "Listing voice agents..." },
+      slack: { status: "Listing voice agents...", output: (r) => r.ok === false ? r.error : `${r.agents?.length ?? 0} agents` },
     });
 
     // ── place_call ───────────────────────────────────────────────────
@@ -503,7 +503,7 @@ export function createVoiceTools(client: WebClient, context?: ScheduleContext): 
           };
         }
       },
-      slack: { status: "Placing call...", detail: (i) => i.to_number },
+      slack: { status: "Placing call...", detail: (i) => i.to_number, output: (r) => r.ok === false ? r.error : 'Call placed' },
     });
   }
 
@@ -638,7 +638,7 @@ export function createVoiceTools(client: WebClient, context?: ScheduleContext): 
         };
       }
     },
-    slack: { status: "Sending SMS...", detail: (i) => i.phone_number },
+      slack: { status: "Sending SMS...", detail: (i) => i.phone_number, output: (r) => r.ok === false ? r.error : 'SMS sent' },
   });
 
   // ── send_voice_note ─────────────────────────────────────────────
@@ -833,7 +833,7 @@ export function createVoiceTools(client: WebClient, context?: ScheduleContext): 
           };
         }
       },
-      slack: { status: "Generating voice note..." },
+      slack: { status: "Generating voice note...", output: (r) => r.ok === false ? r.error : 'Voice note generated' },
     });
   }
 

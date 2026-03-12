@@ -41,7 +41,7 @@ export function createDateTimeTools() {
           week_calendar: weekCalendar,
         };
       },
-      slack: { status: "Checking current date/time..." },
+      slack: { status: "Checking current date/time...", output: (r) => `${r.day}, ${r.date} ${r.time}` },
     }),
   };
 }

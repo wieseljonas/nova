@@ -159,7 +159,7 @@ export function createEmailSyncTools(
           return { ok: false, error: `Sync failed: ${error.message}` };
         }
       },
-      slack: { status: "Syncing emails...", detail: (i) => i.user_name },
+      slack: { status: "Syncing emails...", detail: (i) => i.user_name, output: (r) => r.ok === false ? r.error : `${r.synced ?? 0} emails synced` },
     }),
 
     email_digest: defineTool({
@@ -320,7 +320,7 @@ export function createEmailSyncTools(
           return { ok: false, error: `Digest failed: ${error.message}` };
         }
       },
-      slack: { status: "Running email digest...", detail: (i) => i.user_name },
+      slack: { status: "Running email digest...", detail: (i) => i.user_name, output: (r) => r.ok === false ? r.error : `${r.threads?.length ?? 0} threads` },
     }),
 
     update_email_thread: defineTool({
@@ -437,7 +437,7 @@ export function createEmailSyncTools(
           };
         }
       },
-      slack: { status: "Updating email thread..." },
+      slack: { status: "Updating email thread...", output: (r) => r.ok === false ? r.error : `Updated to '${r.thread_state}'` },
     }),
 
     update_email_threads: defineTool({
@@ -568,7 +568,7 @@ export function createEmailSyncTools(
           };
         }
       },
-      slack: { status: "Updating email threads..." },
+      slack: { status: "Updating email threads...", output: (r) => r.ok === false ? r.error : `${r.updated ?? 0} threads updated` },
     }),
 
     search_emails: defineTool({
@@ -778,7 +778,7 @@ export function createEmailSyncTools(
           };
         }
       },
-      slack: { status: "Searching emails...", detail: (i) => i.query },
+      slack: { status: "Searching emails...", detail: (i) => i.query, output: (r) => r.ok === false ? r.error : `${r.count ?? 0} results` },
     }),
   };
 }
