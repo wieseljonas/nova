@@ -13,8 +13,8 @@ const slackClient = new WebClient(botToken);
 /** Max retries before marking as failed */
 export const MAX_RETRIES = 3;
 
-/** Retry delay in ms (30 minutes — matches heartbeat cron interval) */
-const RETRY_DELAY_MS = 30 * 60 * 1000;
+/** Retry delay in ms (10 minutes — matches heartbeat cron interval) */
+const RETRY_DELAY_MS = 10 * 60 * 1000;
 
 // ── System Prompts ───────────────────────────────────────────────────────────
 
