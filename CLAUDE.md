@@ -1,12 +1,12 @@
-# Aura - AI Agent for RealAdvisor
+# Nova - AI Agent for RealAdvisor
 
 ## What this is
-Aura is an autonomous AI agent that operates as a team member inside RealAdvisor's Slack workspace. It handles bug triage, data analysis, team coordination, and self-improvement.
+Nova is an autonomous AI agent that operates as a team member inside RealAdvisor's Slack workspace. It handles bug triage, data analysis, team coordination, and self-improvement.
 
 ## Monorepo structure
 This is a pnpm workspace monorepo. Run `pnpm install` at the root.
 
-- `packages/db/` — shared database package (`@aura/db`): Drizzle schema, migrations, migration runner
+- `packages/db/` — shared database package (`@nova/db`): Drizzle schema, migrations, migration runner
 - `apps/api/` — Hono API deployed on Vercel (Slack bot, cron jobs, tools)
 - `apps/dashboard/` — Next.js admin dashboard
 - `apps/web/` — marketing site / blog
@@ -27,7 +27,7 @@ This is a pnpm workspace monorepo. Run `pnpm install` at the root.
 - `apps/api/src/` — API source code
 - `apps/api/src/tools/` — Slack, BigQuery, notes, jobs, email, calendar, canvas, sandbox tools
 - `apps/api/src/lib/` — shared libraries (Slack client, Gmail, temporal, formatting)
-- `apps/api/src/db/client.ts` — database client (imports schema from `@aura/db`)
+- `apps/api/src/db/client.ts` — database client (imports schema from `@nova/db`)
 - `apps/dashboard/src/` — dashboard source code
 
 ## Database workflow
@@ -44,7 +44,7 @@ pnpm db:studio      # open Drizzle Studio
 - Slack message formatting uses mrkdwn (not markdown)
 - ISO 8601 timestamps in user's timezone throughout
 - Environment variables configured in Vercel, some injected into sandbox at runtime
-- Import schema types via `import { ... } from "@aura/db/schema"`
+- Import schema types via `import { ... } from "@nova/db/schema"`
 
 ## Tool documentation convention
 - Tool `description` fields are the **primary source** of "when/how to use" guidance for the LLM
@@ -55,4 +55,4 @@ pnpm db:studio      # open Drizzle Studio
 - Slack's `chat.update` has a 40K character limit — messages get truncated
 - pgvector columns must all use the same dimensions (1536)
 - The sandbox (e2b) is a separate environment from Vercel — env vars don't automatically cross over
-- Schema lives in `packages/db/` — both apps import from `@aura/db/schema`
+- Schema lives in `packages/db/` — both apps import from `@nova/db/schema`

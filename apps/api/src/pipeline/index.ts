@@ -223,7 +223,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     }
 
     // Set assistant thread status — triggers the shimmer animation on
-    // Aura's name and shows a loading indicator while processing.
+    // Nova's name and shows a loading indicator while processing.
     // Requires the `assistant:write` scope (enabled via Agents & AI Apps
     // toggle in Slack app settings). Status auto-clears on reply.
     try {
@@ -392,8 +392,6 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       displayName,
       client,
       threadMessageCount: conversation.thread?.length ?? 0,
-      tokenUsage: response.usage,
-      modelId: response.modelId,
       ...(() => {
         const all = (conversation.thread ?? conversation.recentMessages)
           .map(m => ({ displayName: m.displayName, text: m.text }));
@@ -548,10 +546,8 @@ async function runBackgroundTasks(params: {
   threadMessageCount: number;
   recentThreadMessages: Array<{ displayName: string; text: string }>;
   threadMessagesElided: boolean;
-  tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
-  modelId?: string;
 }): Promise<void> {
-  const { context, event, response, toolCalls, displayName, client, threadMessageCount, recentThreadMessages, threadMessagesElided, tokenUsage, modelId } = params;
+  const { context, event, response, toolCalls, displayName, client, threadMessageCount, recentThreadMessages, threadMessagesElided } = params;
 
   try {
     // Store the user's message
@@ -566,7 +562,7 @@ async function runBackgroundTasks(params: {
       metadata: buildMessageMetadata(event),
     });
 
-    // Store Aura's response with a pseudo-timestamp
+    // Store Nova's response with a pseudo-timestamp
     const assistantTs = `${context.messageTs}-aura`;
     await storeMessage({
       slackTs: assistantTs,
@@ -576,8 +572,6 @@ async function runBackgroundTasks(params: {
       userId: "aura",
       role: "assistant",
       content: response,
-      tokenUsage,
-      model: modelId,
     });
 
     // Store tool call I/O as durable messages

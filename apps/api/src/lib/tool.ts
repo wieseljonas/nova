@@ -7,6 +7,15 @@ import { actionLog } from "@aura/db/schema";
 import { lookupPolicy, requestApproval, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
 import { logger } from "./logger.js";
 
+// ── PendingApprovalError ─────────────────────────────────────────────────────
+
+export class PendingApprovalError extends Error {
+  constructor(public readonly actionLogId: string) {
+    super(`Action pending approval: ${actionLogId}`);
+    this.name = "PendingApprovalError";
+  }
+}
+
 // ── Execution Context (AsyncLocalStorage) ────────────────────────────────────
 
 export interface ExecutionContext {
@@ -19,23 +28,16 @@ export interface ExecutionContext {
 
 export const executionContext = new AsyncLocalStorage<ExecutionContext>();
 
-// ── PendingApprovalError ─────────────────────────────────────────────────────
-
-export class PendingApprovalError extends Error {
-  constructor(public readonly actionLogId: string) {
-    super(`Action pending approval: ${actionLogId}`);
-    this.name = "PendingApprovalError";
-  }
-}
-
 // ── Slack Card Metadata ──────────────────────────────────────────────────────
 // Co-located with tool definitions via defineTool() so that Slack card behavior
 // (spinner label, input summary, output summary, URL citations) stays in sync
 // with the tool itself instead of drifting in separate switch blocks.
 
 export interface SlackToolMetadata<TInput = any, TOutput = any> {
-  /** Spinner label shown while tool is running, e.g. "Searching the web..." */
-  status: string;
+  /** Spinner label shown while tool is running. Can be static, sync, or async. */
+  status: string | ((input: TInput) => string | Promise<string>);
+  /** Optional title used when a tool is waiting on human approval */
+  approvalStatus?: string | ((input: TInput) => string | undefined);
   /** Extract a short detail from input args for the in-progress card */
   detail?: (input: TInput) => string | undefined;
   /** Extract a short summary from result for the completed card */
@@ -59,6 +61,17 @@ export function getSlackMeta(t: unknown): SlackToolMetadata | undefined {
 }
 
 /**
+ * Retrieve the user-facing description from a tool definition, if present.
+ */
+export function getToolDescription(t: unknown): string | undefined {
+  if (t && typeof t === "object" && "description" in t) {
+    const description = (t as { description?: unknown }).description;
+    return typeof description === "string" ? description : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Mutable name ref stored in a closure so registerToolNames() can fill it
  * in after the tools map is built.
  */
@@ -68,22 +81,13 @@ interface ToolNameRef {
 
 /**
  * Wrapper around AI SDK's tool() that co-locates Slack card metadata with the
- * tool definition and adds a governance interceptor. Every tool call is logged
- * to action_log; destructive-tier calls are gated behind approval.
+ * tool definition and adds SDK-native needsApproval governance + action logging.
  *
- * Usage:
- * ```ts
- * const myTool = defineTool({
- *   description: "...",
- *   inputSchema: z.object({ query: z.string() }),
- *   execute: async ({ query }) => ({ ok: true, results: [] }),
- *   slack: {
- *     status: "Searching...",
- *     detail: (input) => input.query,
- *     output: (result) => `${result.results.length} results`,
- *   },
- * });
- * ```
+ * Tools with write/destructive risk tier use `needsApproval` to pause for
+ * human approval. The SDK emits a `tool-approval-request` output part, and
+ * respond.ts saves conversation state for resumption.
+ *
+ * Read-tier tools execute immediately with action logging.
  */
 export function defineTool<TInput, TOutput>(config: {
   description: string;
@@ -97,67 +101,18 @@ export function defineTool<TInput, TOutput>(config: {
 
   const toolRef: ToolNameRef = {};
 
-  const governedExecute = async (input: TInput): Promise<TOutput> => {
+  // Wrapped execute that logs to action_log (for read-tier tools)
+  const loggedExecute = async (input: TInput): Promise<TOutput> => {
     const toolName = toolRef.name || "unknown";
     const ctx = executionContext.getStore() ?? {
       triggeredBy: "unknown",
       triggerType: "autonomous" as const,
     };
 
-    let riskTier: "read" | "write" | "destructive" = "write";
-    let policy: ApprovalPolicy | null = null;
-
-    try {
-      const httpInput = input as Record<string, unknown>;
-      const lookup = await lookupPolicy({
-        toolName,
-        url: toolName === "http_request" ? (httpInput.url as string) : undefined,
-        method: toolName === "http_request" ? (httpInput.method as string) : undefined,
-        credentialName: httpInput.credential_name as string | undefined,
-      });
-      policy = lookup;
-      const httpInput2 = input as Record<string, unknown>;
-      riskTier = effectiveRiskTier(policy, toolName === "http_request" ? (httpInput2.method as string) : undefined);
-    } catch (policyErr) {
-      logger.warn("Governance: policy lookup failed, defaulting to write tier", {
-        toolName,
-        error: policyErr,
-      });
-    }
-
-    // Destructive: write pending log → post approval message → throw
-    if (riskTier === "destructive") {
-      const [logEntry] = await db
-        .insert(actionLog)
-        .values({
-          toolName,
-          params: input as any,
-          triggerType: ctx.triggerType,
-          triggeredBy: ctx.triggeredBy,
-          jobId: ctx.jobId ?? null,
-          credentialName: (input as any)?.credential_name ?? null,
-          riskTier,
-          status: "pending_approval",
-        })
-        .returning({ id: actionLog.id });
-
-      await requestApproval({
-        actionLogId: logEntry.id,
-        toolName,
-        params: input,
-        riskTier,
-        policy: policy,
-        context: ctx,
-      });
-
-      throw new PendingApprovalError(logEntry.id);
-    }
-
-    // Read / Write: execute, then log result
     let logId: string | undefined;
 
     try {
-      // Write the log entry before execution (captures params before credential injection)
+      // Write the log entry before execution
       try {
         const [logEntry] = await db
           .insert(actionLog)
@@ -168,7 +123,7 @@ export function defineTool<TInput, TOutput>(config: {
             triggeredBy: ctx.triggeredBy,
             jobId: ctx.jobId ?? null,
             credentialName: (input as any)?.credential_name ?? null,
-            riskTier,
+            riskTier: "read",
             status: "executed",
           })
           .returning({ id: actionLog.id });
@@ -210,7 +165,71 @@ export function defineTool<TInput, TOutput>(config: {
     }
   };
 
-  const toolConfig = { ...rest, execute: governedExecute };
+  const toolConfig: Record<string, unknown> = {
+    description: rest.description,
+    inputSchema: rest.inputSchema,
+    execute: loggedExecute,
+    // SDK-native approval: only gate http_request for now
+    needsApproval: async (input: TInput) => {
+      const toolName = toolRef.name || "unknown";
+
+      // Only http_request needs approval gating -- all other known tools pass through
+      // If toolRef.name is unset (unknown tool), fail-closed to require approval
+      if (toolName !== "http_request" && toolRef.name) {
+        return false;
+      }
+
+      const ctx = executionContext.getStore();
+      // Auto-approve in headless/job mode (no interactive user)
+      if (ctx?.triggerType === "scheduled_job" || ctx?.triggerType === "autonomous") {
+        return false;
+      }
+
+      try {
+        const httpInput = input as Record<string, unknown>;
+        const credentialName = httpInput.credential_name as string | undefined;
+        const method = (httpInput.method as string | undefined) ?? "GET";
+
+        // Check credential-level allowed methods
+        const credentialOwner = httpInput.credential_owner as string | undefined ?? ctx?.triggeredBy;
+        if (credentialName && credentialOwner) {
+          const { getCredentialMethods } = await import("./api-credentials.js");
+          const allowedMethods = await getCredentialMethods(credentialName, credentialOwner);
+          if (allowedMethods && allowedMethods.length > 0) {
+            const methodUpper = method.toUpperCase();
+            if (allowedMethods.map(m => m.toUpperCase()).includes(methodUpper)) {
+              // Method is in the allowed list, skip approval
+              return false;
+            }
+          }
+        }
+
+        const policy = await lookupPolicy({
+          toolName,
+          url: httpInput.url as string | undefined,
+          method,
+          credentialName,
+        });
+        const riskTier = effectiveRiskTier(
+          policy,
+          method,
+        );
+        // Write and destructive tiers need approval
+        return riskTier === "write" || riskTier === "destructive";
+      } catch (err) {
+        logger.warn("needsApproval: policy lookup failed, failing closed (requiring approval)", {
+          toolName,
+          error: err,
+        });
+        return true; // Fail-closed: require approval when policy lookup fails
+      }
+    },
+  };
+
+  if (rest.toModelOutput) {
+    toolConfig.toModelOutput = rest.toModelOutput;
+  }
+
   const t = tool<TInput, TOutput>(
     toolConfig as unknown as Tool<TInput, TOutput>,
   );

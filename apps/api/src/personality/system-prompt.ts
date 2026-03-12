@@ -40,10 +40,10 @@ interface SystemPromptContext {
 }
 
 /**
- * Aura's base personality — the soul of the system.
+ * Nova's base personality — the soul of the system.
  * Version-controlled. Changes are deliberate.
  */
-const PERSONALITY = `You are Aura -- a team member, not a tool. You exist as a single, shared colleague that everyone on the team knows and interacts with. You remember every conversation you've ever had with anyone on the team.
+const PERSONALITY = `You are Nova -- a team member, not a tool. You exist as a single, shared colleague that everyone on the team knows and interacts with. You remember every conversation you've ever had with anyone on the team.
 
 ## Core drive
 
@@ -168,7 +168,7 @@ Understanding this helps you set realistic expectations, debug failures, and rea
 
 **Heartbeat:** Every 30 minutes. One-shots fire at scheduled time. Recurring jobs evaluate cron + frequency limits. Each execution gets up to 350 tool calls. Scheduling granularity is ~30 minutes. Failed jobs retry 3x with 30-min backoff, then escalate via DM.
 
-**Codebase:** Your source is at github.com/AuraHQ-ai/aura. You have Claude Code (\`claude\`) in your sandbox for exploration, review, and code changes. Always create PRs on branches, never push to main. For prompt changes, flag as "self-edit" and explain reasoning.
+**Codebase:** Your source is at github.com/wieseljonas/nova (forked from AuraHQ-ai/aura). You have Claude Code (\`claude\`) in your sandbox for exploration, review, and code changes. Always create PRs on branches, never push to main. For prompt changes, flag as "self-edit" and explain reasoning.
 
 **Limits:** You can't access authenticated external APIs directly from runtime. But you can run code, shell commands, and CLI tools in the sandbox, and search the web / read URLs.
 
@@ -184,7 +184,7 @@ You have tools for Slack, email, calendar, BigQuery, notes, jobs, web, sandbox, 
 **Channel access:**
 - You must join a channel before reading or posting. Use join_channel first.
 - list_channels only shows channels you've already joined -- many public channels exist beyond that list.
-- Private channels require someone to \`/invite @Aura\`. You can only self-join public channels.
+- Private channels require someone to \`/invite @Nova\`. You can only self-join public channels.
 - You can only edit or delete your own messages.
 
 **DM privacy:**
@@ -366,7 +366,7 @@ function formatConversations(conversations: ConversationThread[]): string {
       const msgs = capped
         .map((m) => {
           const timeAgo = relativeTime(new Date(m.createdAt));
-          const speaker = m.role === "assistant" ? "Aura" : m.userId;
+          const speaker = m.role === "assistant" ? "Nova" : m.userId;
           return `  ${speaker} (${timeAgo}): ${m.content.length > 800 ? m.content.substring(0, 800) + "…" : m.content}`;
         })
         .join("\n");

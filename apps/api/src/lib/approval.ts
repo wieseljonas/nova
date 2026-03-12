@@ -139,6 +139,51 @@ export function effectiveRiskTier(
   return "write";
 }
 
+function truncateValue(v: string, max = 200): string {
+  return v.length <= max ? v : `${v.slice(0, max)}...`;
+}
+
+function renderScalar(v: unknown): string {
+  if (v == null) return "null";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return truncateValue(JSON.stringify(v), 160);
+}
+
+function summarizeHttpRequest(params: Record<string, unknown>): string {
+  const method = String(params.method ?? "GET").toUpperCase();
+  const url = String(params.url ?? "(missing URL)");
+  const bodyRaw = params.body;
+  const body =
+    typeof bodyRaw === "string"
+      ? bodyRaw
+      : bodyRaw != null
+        ? JSON.stringify(bodyRaw)
+        : "";
+  const bodyLine = body
+    ? `\n*Body (first 200 chars):*\n\`\`\`${truncateValue(body, 200)}\`\`\``
+    : "";
+  return `*Method:* \`${method}\`\n*URL:* ${url}${bodyLine}`;
+}
+
+function summarizeToolParams(toolName: string, params: unknown): string {
+  if (toolName === "http_request" && params && typeof params === "object") {
+    return summarizeHttpRequest(params as Record<string, unknown>);
+  }
+
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return `*Arguments:* \`${renderScalar(params)}\``;
+  }
+
+  const entries = Object.entries(params as Record<string, unknown>).slice(0, 12);
+  if (entries.length === 0) return "*Arguments:* _(none)_";
+
+  const lines = entries.map(([k, v]) => `- *${k}:* \`${truncateValue(renderScalar(v), 180)}\``);
+  const hasMore = Object.keys(params as Record<string, unknown>).length > entries.length;
+  if (hasMore) lines.push("- _...additional fields omitted_");
+  return lines.join("\n");
+}
+
 // ── Request Approval (post Slack message + write action_log row) ────────────
 
 export async function requestApproval(args: {
@@ -149,7 +194,9 @@ export async function requestApproval(args: {
   policy: ApprovalPolicy | null;
   context: ExecutionContext;
   slackClient?: InstanceType<typeof import("@slack/web-api").WebClient> | null;
-}): Promise<void> {
+  conversationContext?: string;
+  credentialDescription?: string;
+}): Promise<{ ts: string; channelId: string } | null> {
   const { actionLogId, toolName, params, riskTier, policy, context, slackClient: injectedSlackClient } = args;
   const slackClient = injectedSlackClient ?? new WebClient(process.env.SLACK_BOT_TOKEN);
 
@@ -171,60 +218,106 @@ export async function requestApproval(args: {
       ? approvers.map((id) => `<@${id}>`).join(", ")
       : "admins";
 
-  const paramsSummary = JSON.stringify(logEntry.params, null, 2);
-  const truncatedParams =
-    paramsSummary.length > 2800
-      ? paramsSummary.slice(0, 2800) + "\n... (truncated)"
-      : paramsSummary;
+  // ── Color coding by risk tier ──
+  const RISK_COLORS: Record<string, string> = {
+    write: "#e8912d",       // orange
+    destructive: "#e01e5a", // red
+    read: "#2eb67d",        // green
+  };
+  const borderColor = RISK_COLORS[riskTier] ?? "#e8912d";
 
-  const blocks = [
+  // ── Generate LLM summary (with fallback) ──
+  let summary: ApprovalSummary | null = null;
+  try {
+    summary = await generateApprovalSummary({
+      toolName,
+      params: logEntry.params ?? params,
+      conversationContext: args.conversationContext,
+      credentialDescription: args.credentialDescription,
+    });
+  } catch (err) {
+    logger.warn("Failed to generate approval summary", { error: err });
+  }
+
+  // Store summary in action_log if generated
+  if (summary) {
+    await db
+      .update(actionLog)
+      .set({ summary })
+      .where(eq(actionLog.id, actionLogId));
+  }
+
+  // ── Build card title ──
+  const cardTitle = summary?.title
+    ? `🔒 ${summary.title}`
+    : `🔒 Approval Required: ${toolName}`;
+
+  // ── Build card body ──
+  const cardBody = summary?.body
+    ? summary.body
+    : summarizeToolParams(toolName, logEntry.params ?? params);
+
+  // ── Check if the triggering user is admin (for View raw button) ──
+  const { isAdmin } = await import("./permissions.js");
+  const showViewRaw = isAdmin(context.userId) || isAdmin(logEntry.triggeredBy);
+
+  // ── Build blocks inside attachment for colored border ──
+  const attachmentBlocks: any[] = [
     {
-      type: "header" as const,
+      type: "section",
       text: {
-        type: "plain_text" as const,
-        text: `🔒 Approval Required: ${toolName}`,
-        emoji: true,
+        type: "mrkdwn",
+        text: `*${cardTitle}*`,
       },
     },
     {
-      type: "section" as const,
+      type: "section",
       text: {
-        type: "mrkdwn" as const,
-        text: `*Risk tier:* \`${riskTier}\`\n*Requested by:* <@${logEntry.triggeredBy}>\n*Trigger:* ${logEntry.triggerType}${logEntry.jobId ? `\n*Job:* ${logEntry.jobId}` : ""}`,
+        type: "mrkdwn",
+        text: cardBody,
       },
     },
     {
-      type: "section" as const,
-      text: {
-        type: "mrkdwn" as const,
-        text: `*Parameters:*\n\`\`\`${truncatedParams}\`\`\``,
-      },
-    },
-    {
-      type: "actions" as const,
+      type: "actions",
       elements: [
         {
-          type: "button" as const,
-          text: { type: "plain_text" as const, text: "✅ Approve", emoji: true },
+          type: "button",
+          text: { type: "plain_text", text: "✅ Approve", emoji: true },
           style: "primary" as const,
           action_id: `governance_approve_${actionLogId}`,
           value: actionLogId,
         },
         {
-          type: "button" as const,
-          text: { type: "plain_text" as const, text: "❌ Reject", emoji: true },
+          type: "button",
+          text: { type: "plain_text", text: "❌ Reject", emoji: true },
           style: "danger" as const,
           action_id: `governance_reject_${actionLogId}`,
           value: actionLogId,
         },
+        {
+          type: "button",
+          text: { type: "plain_text", text: "📋 View more", emoji: true },
+          action_id: `governance_view_more_${actionLogId}`,
+          value: actionLogId,
+        },
+        ...(showViewRaw
+          ? [
+              {
+                type: "button",
+                text: { type: "plain_text", text: "🔧 View raw", emoji: true },
+                action_id: `governance_view_raw_${actionLogId}`,
+                value: actionLogId,
+              },
+            ]
+          : []),
       ],
     },
     {
-      type: "context" as const,
+      type: "context",
       elements: [
         {
-          type: "mrkdwn" as const,
-          text: `${approverMentions} • \`action_log_id: ${actionLogId}\``,
+          type: "mrkdwn",
+          text: `\`${riskTier}\` · triggered by <@${logEntry.triggeredBy}> · ${logEntry.triggerType} · ${approverMentions}`,
         },
       ],
     },
@@ -243,11 +336,16 @@ export async function requestApproval(args: {
     targetChannel = dm.channel?.id ?? logEntry.triggeredBy;
   }
 
-  await slackClient.chat.postMessage({
+  const result = await slackClient.chat.postMessage({
     channel: targetChannel,
     ...(context.threadTs ? { thread_ts: context.threadTs } : {}),
-    text: `Approval required for ${toolName} (${riskTier})`,
-    blocks,
+    text: `Approval required: ${summary?.title ?? toolName} (${riskTier})`,
+    attachments: [
+      {
+        color: borderColor,
+        blocks: attachmentBlocks,
+      },
+    ],
     metadata: {
       event_type: "approval_request",
       event_payload: {
@@ -271,7 +369,11 @@ export async function requestApproval(args: {
     toolName,
     riskTier,
     channel: targetChannel,
+    messageTs: result.ts,
+    hasSummary: !!summary,
   });
+
+  return result.ts ? { ts: result.ts, channelId: targetChannel } : null;
 }
 
 // ── Handle Approval Reaction ────────────────────────────────────────────────
@@ -340,14 +442,29 @@ export async function handleApprovalReaction(args: {
   const isApproved = reaction === "white_check_mark";
   const newStatus = isApproved ? "approved" : "rejected";
 
-  await db
+  // Atomic compare-and-set to prevent race condition (P0-1 fix)
+  const updated = await db
     .update(actionLog)
     .set({
       status: newStatus,
       approvedBy: reactorUserId,
       approvedAt: new Date(),
     })
-    .where(eq(actionLog.id, actionLogId));
+    .where(
+      and(
+        eq(actionLog.id, actionLogId),
+        eq(actionLog.status, "pending_approval")
+      )
+    )
+    .returning({ id: actionLog.id });
+
+  if (updated.length === 0) {
+    logger.info("handleApprovalReaction: action already processed by another approver", {
+      actionLogId,
+      reactorUserId,
+    });
+    return;
+  }
 
   if (entry.jobId) {
     if (isApproved) {
@@ -378,4 +495,82 @@ export async function handleApprovalReaction(args: {
     newStatus,
     reactorUserId,
   });
+}
+
+// ── LLM-Generated Approval Summaries ────────────────────────────────────────
+
+export interface ApprovalSummary {
+  title: string;
+  body: string;
+}
+
+/**
+ * Generate a human-readable summary of a tool call for the approval card.
+ * Uses the main LLM model with a 3-second timeout.
+ * Returns null on any failure — the card falls back to raw params.
+ */
+export async function generateApprovalSummary(args: {
+  toolName: string;
+  params: unknown;
+  conversationContext?: string;
+  credentialDescription?: string;
+}): Promise<ApprovalSummary | null> {
+  try {
+    const { generateText } = await import("ai");
+    const { getMainModel } = await import("./ai.js");
+
+    const { model } = await getMainModel();
+
+    const paramStr = JSON.stringify(args.params, null, 2);
+    const truncatedParams = paramStr.length > 3000 ? paramStr.slice(0, 3000) + "\n...(truncated)" : paramStr;
+
+    const prompt = `You are summarizing a tool call for a human approval card in Slack.
+
+Tool: ${args.toolName}
+Parameters:
+${truncatedParams}
+${args.credentialDescription ? `\nCredential context: ${args.credentialDescription}` : ""}
+${args.conversationContext ? `\nConversation context (last messages):\n${args.conversationContext}` : ""}
+
+Respond with EXACTLY two lines:
+TITLE: <one-line action summary, max 60 chars, e.g. "Update lead status to Qualified in Close CRM">
+BODY: <key details in max 3 short lines separated by \\n, e.g. names, emails, values — no field IDs or UUIDs>
+
+Rules:
+- TITLE must be a plain-language description of what this action does
+- BODY should extract the most important human-readable values (names, emails, amounts, statuses)
+- Never include raw field IDs, UUIDs, or technical parameters
+- If you can't determine readable values, summarize the operation type`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    try {
+      const result = await generateText({
+        model,
+        prompt,
+        maxOutputTokens: 200,
+        temperature: 0,
+        abortSignal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      const text = result.text.trim();
+      const titleMatch = text.match(/^TITLE:\s*(.+)/m);
+      const bodyMatch = text.match(/^BODY:\s*(.+)/ms);
+
+      if (!titleMatch) return null;
+
+      return {
+        title: titleMatch[1].trim().slice(0, 80),
+        body: bodyMatch ? bodyMatch[1].trim().slice(0, 300) : "",
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (err) {
+    logger.warn("generateApprovalSummary failed, falling back to raw params", { error: err });
+    return null;
+  }
 }
