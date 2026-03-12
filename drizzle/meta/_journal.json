@@ -267,6 +267,13 @@
       "when": 1773256074462,
       "tag": "0037_credential_allowed_methods",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1773292269439,
+      "tag": "0038_credential_display_name",
+      "breakpoints": true
     }
   ]
 }

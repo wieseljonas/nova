@@ -704,6 +704,7 @@ export const credentials = pgTable(
     value: text("value").notNull(),
     keyVersion: integer("key_version").notNull().default(1),
     allowedMethods: text("allowed_methods").array(),
+    displayName: text("display_name"),
     expiresAt: timestamptz("expires_at"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),

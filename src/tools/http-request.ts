@@ -1,7 +1,7 @@
 import dns from "node:dns/promises";
 import { z } from "zod";
 import { defineTool } from "../lib/tool.js";
-import { getApiCredentialWithType } from "../lib/api-credentials.js";
+import { getApiCredentialWithType, setCredentialDisplayName } from "../lib/api-credentials.js";
 import { logger } from "../lib/logger.js";
 import type { ScheduleContext } from "../db/schema.js";
 
@@ -39,6 +39,13 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           .string()
           .optional()
           .describe("Slack user ID of the credential owner"),
+        display_label: z
+          .string()
+          .optional()
+          .describe(
+            "Human-friendly label for this API (e.g. 'Close CRM France'). " +
+            "Always include this when using a credential. It powers the status spinner shown to the user."
+          ),
         headers: z
           .record(z.string())
           .optional()
@@ -101,6 +108,18 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                 ok: false as const,
                 error: `Credential "${input.credential_name}" not found or expired`,
               };
+            }
+
+            // Persist display_label on first use (LLM sets it once, reused forever)
+            if (input.display_label && !credResult.displayName) {
+              setCredentialDisplayName(
+                input.credential_name,
+                owner,
+                input.display_label,
+                requestingUserId,
+              ).catch((err) =>
+                logger.warn("Failed to persist display_label", { error: err.message }),
+              );
             }
 
             switch (credResult.authScheme) {
@@ -239,7 +258,15 @@ export function createHttpRequestTool(context?: ScheduleContext) {
         }
       },
       slack: {
-        status: "Making HTTP request...",
+        status: (input) => {
+          if (input.display_label) {
+            return `Using ${input.display_label}`;
+          }
+          if (input.credential_name) {
+            return `Using ${input.credential_name}`;
+          }
+          return "Making HTTP request...";
+        },
         detail: (input) => `${input.method} ${input.url}`,
         output: (result: any) =>
           result.ok === false && result.error

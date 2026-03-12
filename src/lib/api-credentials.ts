@@ -257,7 +257,7 @@ export async function getApiCredentialWithType(
   ownerId: string,
   requestingUserId: string,
   intent: "read" | "write",
-): Promise<{ value: string; authScheme: AuthScheme } | null> {
+): Promise<{ value: string; authScheme: AuthScheme; displayName: string | null } | null> {
   const cred = await fetchAndAuthorize(name, ownerId, requestingUserId, intent);
   if (!cred) return null;
 
@@ -288,6 +288,7 @@ export async function getApiCredentialWithType(
     return {
       value: tokenResponse.access_token,
       authScheme: cred.authScheme as AuthScheme,
+      displayName: cred.displayName,
     };
   }
 
@@ -296,10 +297,11 @@ export async function getApiCredentialWithType(
     return {
       value: token,
       authScheme: cred.authScheme as AuthScheme,
+      displayName: cred.displayName,
     };
   }
 
-  return { value: decrypted, authScheme: cred.authScheme as AuthScheme };
+  return { value: decrypted, authScheme: cred.authScheme as AuthScheme, displayName: cred.displayName };
 }
 
 async function exchangeGoogleServiceAccountToken(
@@ -609,6 +611,22 @@ export async function revokeApiCredentialAccess(
     );
 
   await audit(credentialId, cred.name, revokerId, "revoke", `grantee:${granteeId}`);
+}
+
+
+export async function setCredentialDisplayName(
+  name: string,
+  ownerId: string,
+  displayName: string,
+  requestingUserId?: string,
+): Promise<void> {
+  validateName(name);
+  // Only the credential owner can set display name
+  if (requestingUserId && requestingUserId !== ownerId) return;
+  await db
+    .update(credentials)
+    .set({ displayName, updatedAt: new Date() })
+    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)));
 }
 
 export async function getCredentialMethods(

@@ -553,6 +553,9 @@ export async function generateResponse(
   try {
     const result = await agent.stream(streamCallOptions as any);
 
+    // Track tool call inputs so result/error handlers can resolve dynamic status
+    const toolCallInputs = new Map<string, Record<string, unknown>>();
+
     for await (const chunk of result.fullStream) {
       resetTimer();
 
@@ -638,8 +641,9 @@ export async function generateResponse(
           }
 
           const slackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = slackMeta?.status ?? "Working on it...";
           const inputArgs = (chunk as any).input ?? {};
+          toolCallInputs.set(chunk.toolCallId, inputArgs);
+          const title = (typeof slackMeta?.status === "function" ? slackMeta.status(inputArgs) : slackMeta?.status) ?? "Working on it...";
           const details = slackMeta?.detail?.(inputArgs);
           const toolCallPayload = {
             chunks: [{
@@ -683,7 +687,7 @@ export async function generateResponse(
 
         case "tool-result": {
           const resultSlackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = resultSlackMeta?.status ?? "Done";
+          const title = (typeof resultSlackMeta?.status === "function" ? resultSlackMeta.status(toolCallInputs.get(chunk.toolCallId) ?? {}) : resultSlackMeta?.status) ?? "Done";
           const output = chunk.output;
           const isError = output && typeof output === "object" &&
             "ok" in output && output.ok === false;
@@ -745,7 +749,7 @@ export async function generateResponse(
           const errToolName = (chunk as any).toolName;
           const errToolCallId = (chunk as any).toolCallId;
           const errSlackMeta = getSlackMeta(tools[errToolName]);
-          const title = errSlackMeta?.status ?? "Failed";
+          const title = (typeof errSlackMeta?.status === "function" ? errSlackMeta.status(toolCallInputs.get(errToolCallId) ?? {}) : errSlackMeta?.status) ?? "Failed";
           const err = (chunk as any).error;
           const errorMsg = err instanceof Error ? err.message : String(err);
           const toolErrorPayload = {
