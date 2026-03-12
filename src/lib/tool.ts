@@ -25,8 +25,8 @@ export const executionContext = new AsyncLocalStorage<ExecutionContext>();
 // with the tool itself instead of drifting in separate switch blocks.
 
 export interface SlackToolMetadata<TInput = any, TOutput = any> {
-  /** Spinner label shown while tool is running, e.g. "Searching the web..." */
-  status: string;
+  /** Spinner label shown while tool is running. Can be a static string or a function of input for dynamic labels. */
+  status: string | ((input: TInput) => string);
   /** Optional title used when a tool is waiting on human approval */
   approvalStatus?: string | ((input: TInput) => string | undefined);
   /** Extract a short detail from input args for the in-progress card */
