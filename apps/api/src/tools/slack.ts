@@ -22,6 +22,7 @@ import { createSubagentTools } from "./subagents.js";
 import { createVoiceTools } from "./voice.js";
 import { createResourceTools } from "./resources.js";
 import { createHttpRequestTool } from "./http-request.js";
+import { createApprovalTools } from "./approvals.js";
 import { createDateTimeTools } from "./datetime.js";
 import type { ScheduleContext } from "@aura/db/schema";
 import { formatForSlack } from "../lib/format.js";
@@ -3006,6 +3007,9 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
 
     // ── HTTP Request Tool (governed external API calls) ─────────────
     ...createHttpRequestTool(context),
+
+    // ── Approval System Tools (batch operations + policy management) ─
+    ...createApprovalTools(),
   };
 
   // ── Anthropic Tool Discovery ──────────────────────────────────────

@@ -88,62 +88,75 @@ export async function lookupPolicy(args: {
   method?: string;
   credentialName?: string;
 }): Promise<ApprovalPolicy | null> {
-  const rows = await db.select().from(approvalPolicies);
-
-  const candidates: Array<{ policy: ApprovalPolicy; specificity: number }> = [];
+  const rows = await db
+    .select()
+    .from(approvalPolicies)
+    .orderBy(sql`${approvalPolicies.priority} DESC`);
 
   for (const policy of rows) {
     if (args.toolName === "http_request") {
+      // Check URL pattern match
       if (policy.urlPattern && args.url) {
         if (!matchUrlPattern(policy.urlPattern, args.url)) continue;
-
-        if (
-          policy.httpMethods &&
-          policy.httpMethods.length > 0 &&
-          args.method &&
-          !policy.httpMethods.includes(args.method.toUpperCase())
-        ) {
-          continue;
-        }
-
-        if (
-          policy.credentialName &&
-          args.credentialName &&
-          policy.credentialName !== args.credentialName
-        ) {
-          continue;
-        }
-
-        candidates.push({
-          policy,
-          specificity: patternSpecificity(policy.urlPattern),
-        });
-      } else if (policy.toolPattern === "http_request") {
-        candidates.push({ policy, specificity: 0 });
+      } else if (policy.toolPattern !== "http_request" && policy.toolPattern !== null) {
+        continue;
       }
+
+      // Check method match
+      if (
+        policy.httpMethods &&
+        policy.httpMethods.length > 0 &&
+        args.method &&
+        !policy.httpMethods.includes(args.method.toUpperCase())
+      ) {
+        continue;
+      }
+
+      // Check credential match
+      if (
+        policy.credentialName &&
+        args.credentialName &&
+        policy.credentialName !== args.credentialName
+      ) {
+        continue;
+      }
+
+      // First match wins (policies are ordered by priority DESC)
+      return policy;
     } else {
       if (policy.toolPattern === args.toolName) {
-        candidates.push({ policy, specificity: 100 });
+        return policy;
       }
     }
   }
 
-  if (candidates.length === 0) return null;
-
-  candidates.sort((a, b) => b.specificity - a.specificity);
-  return candidates[0].policy;
+  return null;
 }
 
 /**
- * Determine the effective risk tier for a tool invocation.
- * If a policy matches, use its tier. Otherwise fall back to method-based defaults
- * for http_request, or "write" for named tools.
+ * Determine the effective action for a tool invocation based on policy.
+ * Returns: require_approval | auto_approve | deny
+ * If no policy matches, defaults to auto_approve for GET, require_approval otherwise.
  */
-export function effectiveRiskTier(
+export function effectiveAction(
   policy: ApprovalPolicy | null,
   method?: string,
+): "require_approval" | "auto_approve" | "deny" {
+  if (policy) return policy.action as "require_approval" | "auto_approve" | "deny";
+  // Default: auto-approve reads, require approval for writes
+  if (method && METHOD_DEFAULT_TIER[method.toUpperCase()] === "read") {
+    return "auto_approve";
+  }
+  return "require_approval";
+}
+
+/**
+ * Determine the effective risk tier for a tool invocation (for logging/display).
+ * Maps from method to risk tier for display purposes.
+ */
+export function effectiveRiskTier(
+  method?: string,
 ): "read" | "write" | "destructive" {
-  if (policy) return policy.riskTier as "read" | "write" | "destructive";
   if (method) return METHOD_DEFAULT_TIER[method.toUpperCase()] ?? "write";
   return "write";
 }

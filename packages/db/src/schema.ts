@@ -708,21 +708,105 @@ export const approvalPolicies = pgTable(
     id: uuid("id")
       .primaryKey()
       .default(sql`gen_random_uuid()`),
+    name: text("name"),
+    priority: integer("priority").notNull().default(0),
     toolPattern: text("tool_pattern"),
     urlPattern: text("url_pattern"),
     httpMethods: text("http_methods").array(),
     credentialName: text("credential_name"),
-    riskTier: text("risk_tier").notNull(),
+    action: text("action").notNull().default("require_approval"),
+    approvalMode: text("approval_mode").notNull().default("any_one"),
     approverIds: text("approver_ids").array(),
     approvalChannel: text("approval_channel"),
     createdBy: text("created_by").notNull(),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
+    updatedAt: timestamptz("updated_at").notNull().defaultNow(),
   },
   (table) => [
     check(
-      "approval_policies_risk_tier_check",
-      sql`${table.riskTier} IN ('read','write','destructive')`,
+      "approval_policies_action_check",
+      sql`${table.action} IN ('require_approval','auto_approve','deny')`,
     ),
+    check(
+      "approval_policies_approval_mode_check",
+      sql`${table.approvalMode} IN ('any_one','all_must')`,
+    ),
+  ],
+);
+
+// ── Approvals (unified batch approval system) ───────────────────────────────
+
+export const approvals = pgTable(
+  "approvals",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    title: text("title").notNull(),
+    description: text("description"),
+    status: text("status").notNull().default("pending"),
+    credentialName: text("credential_name"),
+    urlPattern: text("url_pattern"),
+    httpMethod: text("http_method"),
+    totalItems: integer("total_items").notNull().default(1),
+    completedItems: integer("completed_items").notNull().default(0),
+    failedItems: integer("failed_items").notNull().default(0),
+    policyId: uuid("policy_id").references(() => approvalPolicies.id),
+    requestedBy: text("requested_by").notNull().default("nova"),
+    requestedInChannel: text("requested_in_channel"),
+    approvedBy: text("approved_by").array(),
+    approvalMode: text("approval_mode").notNull().default("any_one"),
+    requiredApprovals: integer("required_approvals").notNull().default(1),
+    jobId: uuid("job_id").references(() => jobs.id),
+    slackMessageTs: text("slack_message_ts"),
+    slackChannel: text("slack_channel"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+    updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "approvals_status_check",
+      sql`${table.status} IN ('pending','approved','rejected','executing','completed','failed')`,
+    ),
+    check(
+      "approvals_approval_mode_check",
+      sql`${table.approvalMode} IN ('any_one','all_must')`,
+    ),
+    index("approvals_status_idx").on(table.status),
+    index("approvals_job_id_idx").on(table.jobId),
+  ],
+);
+
+// ── Approval Items (batch operation items) ──────────────────────────────────
+
+export const approvalItems = pgTable(
+  "approval_items",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    approvalId: uuid("approval_id")
+      .notNull()
+      .references(() => approvals.id, { onDelete: "cascade" }),
+    sequenceNum: integer("sequence_num").notNull(),
+    method: text("method").notNull(),
+    url: text("url").notNull(),
+    body: jsonb("body"),
+    headers: jsonb("headers"),
+    status: text("status").notNull().default("pending"),
+    responseStatus: integer("response_status"),
+    responseBody: jsonb("response_body"),
+    error: text("error"),
+    executedAt: timestamptz("executed_at"),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      "approval_items_status_check",
+      sql`${table.status} IN ('pending','executing','succeeded','failed','skipped')`,
+    ),
+    index("approval_items_approval_id_idx").on(table.approvalId),
+    index("approval_items_status_idx").on(table.status),
   ],
 );
 
@@ -764,6 +848,10 @@ export type ActionLog = typeof actionLog.$inferSelect;
 export type NewActionLog = typeof actionLog.$inferInsert;
 export type ApprovalPolicy = typeof approvalPolicies.$inferSelect;
 export type NewApprovalPolicy = typeof approvalPolicies.$inferInsert;
+export type Approval = typeof approvals.$inferSelect;
+export type NewApproval = typeof approvals.$inferInsert;
+export type ApprovalItem = typeof approvalItems.$inferSelect;
+export type NewApprovalItem = typeof approvalItems.$inferInsert;
 
 /** Context for tools that need to know the current conversation's routing. */
 export interface ScheduleContext {

@@ -4,6 +4,7 @@ import { waitUntil } from "@vercel/functions";
 import { cronApp } from "./cron/consolidate.js";
 import { heartbeatApp } from "./cron/heartbeat.js";
 import { elevenlabsWebhookApp } from "./webhook/elevenlabs.js";
+import { executeNowApp } from "./routes/execute-now.js";
 import { runPipeline } from "./pipeline/index.js";
 import {
   publishHomeTab,
@@ -112,6 +113,7 @@ app.get("/api/memories/search", async (c) => {
 // Mount cron routes
 app.route("/", cronApp);
 app.route("/", heartbeatApp);
+app.route("/api/execute-now", executeNowApp);
 
 // Mount ElevenLabs voice webhook routes
 app.route("/api/webhook/elevenlabs", elevenlabsWebhookApp);
@@ -673,130 +675,227 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(denyPromise);
       }
 
-      // ── Governance approval buttons ─────────────────────────────────
-      if (action.action_id?.startsWith("governance_approve_")) {
-        const actionLogId = action.action_id.replace("governance_approve_", "");
-
-        // Immediately update the approval message to show "executing" state
-        const messageTs = payload.message?.ts;
-        const channelId = payload.channel?.id;
-        if (messageTs && channelId) {
-          // Extract blocks from attachments (new format) or top-level blocks (old format)
-          const attachments = payload.message?.attachments as any[] | undefined;
-          const originalBlocks = attachments?.[0]?.blocks ?? (payload.message?.blocks ?? []) as any[];
-          const originalColor = attachments?.[0]?.color;
-          // Remove the actions block (buttons) and update context to show executing
-          const updatedBlocks = originalBlocks
-            .filter((b: any) => b.type !== "actions")
-            .map((b: any) => {
-              if (b.type === "context") {
-                return {
-                  type: "context",
-                  elements: [{
-                    type: "mrkdwn",
-                    text: `:hourglass_flowing_sand: Approved by <@${userId}> -- executing now...`,
-                  }],
-                };
-              }
-              return b;
-            });
-          const updatePayload: any = {
-            channel: channelId,
-            ts: messageTs,
-            text: `Approved by <@${userId}> -- executing...`,
-          };
-          if (attachments?.length) {
-            updatePayload.attachments = [{ color: originalColor ?? "#2eb67d", blocks: updatedBlocks }];
-          } else {
-            updatePayload.blocks = updatedBlocks;
-          }
-          waitUntil(slackClient.chat.update(updatePayload).catch((err: any) => logger.warn("Failed to update approval message", { err })));
-        }
+      // ── Unified approval system buttons ─────────────────────────────────
+      if (action.action_id?.startsWith("approval_approve_")) {
+        const approvalId = action.action_id.replace("approval_approve_", "");
 
         const approvePromise = (async () => {
           try {
-            const { handleApprovalReaction } = await import("./lib/approval.js");
-            await handleApprovalReaction({
-              actionLogId,
-              reaction: "white_check_mark",
-              reactorUserId: userId,
-              slackClient,
-            });
+            const { approvals, jobs } = await import("@aura/db/schema");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
 
-            // HITL: Resume conversation after approval
-            const { resumeConversationAfterApproval } = await import("./lib/hitl-resumption.js");
-            await resumeConversationAfterApproval({
-              actionLogId,
+            // Update approval status
+            await db
+              .update(approvals)
+              .set({
+                status: "approved",
+                approvedBy: [userId],
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            // Create a one-shot job to execute the batch
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (!approval) {
+              logger.error("Approval not found after update", { approvalId });
+              return;
+            }
+
+            const [job] = await db
+              .insert(jobs)
+              .values({
+                name: `batch-execution-${approvalId}`,
+                description: `Execute batch approval: ${approval.title}`,
+                status: "pending",
+                requestedBy: approval.requestedBy,
+                priority: "high",
+                channelId: approval.requestedInChannel ?? null,
+              })
+              .returning({ id: jobs.id });
+
+            // Link job to approval
+            await db
+              .update(approvals)
+              .set({ jobId: job.id })
+              .where(eq(approvals.id, approvalId));
+
+            // Trigger immediate execution via /api/execute-now
+            const cronSecret = process.env.CRON_SECRET;
+            if (cronSecret) {
+              const executeUrl = `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/execute-now`;
+              await fetch(executeUrl, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": `Bearer ${cronSecret}`,
+                },
+                body: JSON.stringify({ jobId: job.id, approvalId }),
+              });
+            }
+
+            logger.info("Batch approval approved and job created", {
+              approvalId,
+              jobId: job.id,
               approvedBy: userId,
-              slackClient,
             });
           } catch (err) {
-            recordError("interactions.governance_approve", err, { userId, actionLogId });
-            logger.error("Approval button handler failed", { userId, actionLogId, error: err });
+            recordError("interactions.approval_approve", err, { userId, approvalId });
+            logger.error("Approval button handler failed", { userId, approvalId, error: err });
           }
         })();
         waitUntil(approvePromise);
       }
 
-      if (action.action_id?.startsWith("governance_reject_")) {
-        const actionLogId = action.action_id.replace("governance_reject_", "");
-
-        // Immediately update the approval message to show rejected state
-        const rejectMessageTs = payload.message?.ts;
-        const rejectChannelId = payload.channel?.id;
-        if (rejectMessageTs && rejectChannelId) {
-          const rejectAttachments = payload.message?.attachments as any[] | undefined;
-          const rejectOrigBlocks = rejectAttachments?.[0]?.blocks ?? (payload.message?.blocks ?? []) as any[];
-          const updatedBlocks = rejectOrigBlocks
-            .filter((b: any) => b.type !== "actions")
-            .map((b: any) => {
-              if (b.type === "context") {
-                return {
-                  type: "context",
-                  elements: [{
-                    type: "mrkdwn",
-                    text: `:x: Rejected by <@${userId}>`,
-                  }],
-                };
-              }
-              return b;
-            });
-          const rejectPayload: any = {
-            channel: rejectChannelId,
-            ts: rejectMessageTs,
-            text: `Rejected by <@${userId}>`,
-          };
-          if (rejectAttachments?.length) {
-            rejectPayload.attachments = [{ color: "#e01e5a", blocks: updatedBlocks }];
-          } else {
-            rejectPayload.blocks = updatedBlocks;
-          }
-          waitUntil(slackClient.chat.update(rejectPayload).catch((err: any) => logger.warn("Failed to update rejection message", { err })));
-        }
+      if (action.action_id?.startsWith("approval_reject_")) {
+        const approvalId = action.action_id.replace("approval_reject_", "");
 
         const rejectPromise = (async () => {
           try {
-            const { handleApprovalReaction } = await import("./lib/approval.js");
-            await handleApprovalReaction({
-              actionLogId,
-              reaction: "x",
-              reactorUserId: userId,
-              slackClient,
-            });
+            const { approvals } = await import("@aura/db/schema");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
 
-            // HITL: Handle rejection
-            const { handleToolRejection } = await import("./lib/hitl-resumption.js");
-            await handleToolRejection({
-              actionLogId,
+            // Update approval status
+            await db
+              .update(approvals)
+              .set({
+                status: "rejected",
+                approvedBy: [userId],
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            // Update Slack card
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (approval?.slackChannel && approval.slackMessageTs) {
+              await slackClient.chat.update({
+                channel: approval.slackChannel,
+                ts: approval.slackMessageTs,
+                text: `Rejected by <@${userId}>`,
+                attachments: [
+                  {
+                    color: "#e01e5a",
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `*❌ ${approval.title}*`,
+                        },
+                      },
+                      {
+                        type: "context",
+                        elements: [
+                          {
+                            type: "mrkdwn",
+                            text: `Rejected by <@${userId}>`,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              });
+            }
+
+            logger.info("Batch approval rejected", {
+              approvalId,
               rejectedBy: userId,
-              slackClient,
             });
           } catch (err) {
-            recordError("interactions.governance_reject", err, { userId, actionLogId });
-            logger.error("Rejection button handler failed", { userId, actionLogId, error: err });
+            recordError("interactions.approval_reject", err, { userId, approvalId });
+            logger.error("Rejection button handler failed", { userId, approvalId, error: err });
           }
         })();
         waitUntil(rejectPromise);
+      }
+
+      if (action.action_id?.startsWith("approval_review_") && payload.trigger_id) {
+        const approvalId = action.action_id.replace("approval_review_", "");
+
+        const reviewPromise = (async () => {
+          try {
+            const { approvals, approvalItems } = await import("@aura/db/schema");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (!approval) {
+              logger.warn("Review: approval not found", { approvalId });
+              return;
+            }
+
+            const items = await db
+              .select()
+              .from(approvalItems)
+              .where(eq(approvalItems.approvalId, approvalId))
+              .orderBy(approvalItems.sequenceNum)
+              .limit(10);
+
+            const itemsText = items.map((item, idx) => 
+              `${idx + 1}. \`${item.method}\` ${item.url}`
+            ).join("\n");
+
+            const totalText = approval.totalItems > 10 
+              ? `\n\n_Showing first 10 of ${approval.totalItems} items_` 
+              : "";
+
+            const modal: any = {
+              type: "modal",
+              title: {
+                type: "plain_text",
+                text: "Approval Items",
+                emoji: true,
+              },
+              close: {
+                type: "plain_text",
+                text: "Close",
+              },
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: approval.title,
+                    emoji: true,
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*Items to execute:*\n${itemsText}${totalText}`,
+                  },
+                },
+              ],
+            };
+
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
+          } catch (err) {
+            recordError("interactions.approval_review", err, { userId, approvalId });
+            logger.error("Review modal failed", { userId, approvalId, error: err });
+          }
+        })();
+        waitUntil(reviewPromise);
       }
 
       // ── Approval modal buttons (View more / View raw) ─────────────
