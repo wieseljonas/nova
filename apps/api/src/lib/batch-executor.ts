@@ -70,7 +70,8 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     });
 
     const approvalMode = policy?.approvalMode ?? "any_one";
-    const requiredApprovals = approvalMode === "all_must" ? (policy?.approverIds?.length ?? 1) : 1;
+    const approverIds = policy?.approverIds ?? [];
+    const requiredApprovals = approvalMode === "all_must" ? (approverIds.length > 0 ? approverIds.length : 1) : 1;
 
     // Create approval record
     const [approval] = await db
@@ -86,6 +87,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
         approvalMode,
+        approverIds,
         requiredApprovals,
       })
       .returning({ id: approvals.id });
@@ -105,7 +107,6 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     );
 
     // Build Slack approval card
-    const approverIds = policy?.approverIds ?? [];
     const approverMentions =
       approverIds.length > 0
         ? approverIds.map((id) => `<@${id}>`).join(", ")

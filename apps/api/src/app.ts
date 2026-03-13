@@ -652,20 +652,11 @@ app.post("/api/slack/interactions", async (c) => {
         const approvePromise = (async () => {
           try {
             const { approvals, jobs } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
+            const { eq, sql } = await import("drizzle-orm");
             const { db } = await import("./db/client.js");
+            const { isAdmin } = await import("./lib/permissions.js");
 
-            // Update approval status
-            await db
-              .update(approvals)
-              .set({
-                status: "approved",
-                approvedBy: [userId],
-                updatedAt: new Date(),
-              })
-              .where(eq(approvals.id, approvalId));
-
-            // Create a one-shot job to execute the batch
+            // First, fetch the current approval to check authorization and state
             const approvalRows = await db
               .select()
               .from(approvals)
@@ -674,47 +665,149 @@ app.post("/api/slack/interactions", async (c) => {
 
             const approval = approvalRows[0];
             if (!approval) {
-              logger.error("Approval not found after update", { approvalId });
+              logger.error("Approval not found", { approvalId });
               return;
             }
 
-            const [job] = await db
-              .insert(jobs)
-              .values({
-                name: `batch-execution-${approvalId}`,
-                description: `Execute batch approval: ${approval.title}`,
-                status: "pending",
-                requestedBy: approval.requestedBy,
-                priority: "high",
-                channelId: approval.requestedInChannel ?? null,
-              })
-              .returning({ id: jobs.id });
+            // BUG FIX 1: Authorization check
+            const approverIds = approval.approverIds ?? [];
+            const isAuthorized = 
+              isAdmin(userId) || 
+              (approverIds.length === 0 ? isAdmin(userId) : approverIds.includes(userId));
 
-            // Link job to approval
-            await db
-              .update(approvals)
-              .set({ jobId: job.id })
-              .where(eq(approvals.id, approvalId));
-
-            // Trigger immediate execution via /api/execute-now
-            const cronSecret = process.env.CRON_SECRET;
-            if (cronSecret) {
-              const executeUrl = `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/execute-now`;
-              await fetch(executeUrl, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "Authorization": `Bearer ${cronSecret}`,
-                },
-                body: JSON.stringify({ jobId: job.id, approvalId }),
-              });
+            if (!isAuthorized) {
+              logger.warn("Unauthorized approval attempt", { approvalId, userId, approverIds });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: "You're not authorized to approve this.",
+                });
+              }
+              return;
             }
 
-            logger.info("Batch approval approved and job created", {
-              approvalId,
-              jobId: job.id,
-              approvedBy: userId,
-            });
+            // BUG FIX 2: Implement all_must approval mode logic
+            const approvalMode = approval.approvalMode ?? "any_one";
+            const requiredApprovals = approval.requiredApprovals ?? 1;
+            const currentApprovedBy = approval.approvedBy ?? [];
+
+            // Check if user already approved (prevent duplicate approvals)
+            if (currentApprovedBy.includes(userId)) {
+              logger.info("User already approved this approval", { approvalId, userId });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: "You've already approved this.",
+                });
+              }
+              return;
+            }
+
+            // Atomically append userId to approvedBy array
+            const updatedRows = await db
+              .update(approvals)
+              .set({
+                approvedBy: sql`array_append(${approvals.approvedBy}, ${userId})`,
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId))
+              .returning();
+
+            const updatedApproval = updatedRows[0];
+            if (!updatedApproval) {
+              logger.error("Failed to update approval", { approvalId });
+              return;
+            }
+
+            const newApprovedBy = updatedApproval.approvedBy ?? [];
+            const approvalCount = newApprovedBy.length;
+
+            // Determine if execution should proceed
+            let shouldExecute = false;
+            if (approvalMode === "any_one") {
+              // For any_one mode, first approval triggers execution
+              shouldExecute = true;
+            } else if (approvalMode === "all_must") {
+              // For all_must mode, check if threshold is met
+              shouldExecute = approvalCount >= requiredApprovals;
+            }
+
+            if (shouldExecute) {
+              // Transition to approved and create execution job
+              await db
+                .update(approvals)
+                .set({
+                  status: "approved",
+                  updatedAt: new Date(),
+                })
+                .where(eq(approvals.id, approvalId));
+
+              const [job] = await db
+                .insert(jobs)
+                .values({
+                  name: `batch-execution-${approvalId}`,
+                  description: `Execute batch approval: ${approval.title}`,
+                  status: "pending",
+                  requestedBy: approval.requestedBy,
+                  priority: "high",
+                  channelId: approval.requestedInChannel ?? null,
+                })
+                .returning({ id: jobs.id });
+
+              // Link job to approval
+              await db
+                .update(approvals)
+                .set({ jobId: job.id })
+                .where(eq(approvals.id, approvalId));
+
+              // Trigger immediate execution via /api/execute-now
+              const cronSecret = process.env.CRON_SECRET;
+              if (cronSecret) {
+                const executeUrl = `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/execute-now`;
+                await fetch(executeUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${cronSecret}`,
+                  },
+                  body: JSON.stringify({ jobId: job.id, approvalId }),
+                });
+              }
+
+              logger.info("Batch approval approved and job created", {
+                approvalId,
+                jobId: job.id,
+                approvedBy: newApprovedBy,
+              });
+            } else {
+              // For all_must mode: not enough approvals yet, update the Slack card to show progress
+              logger.info("Approval recorded, waiting for more approvals", {
+                approvalId,
+                approvalMode,
+                approvalCount,
+                requiredApprovals,
+                approvedBy: newApprovedBy,
+              });
+
+              // Update Slack message to show approval progress
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                try {
+                  const progressText = `Approved by ${approvalCount}/${requiredApprovals}: ${newApprovedBy.map((id: string) => `<@${id}>`).join(", ")}`;
+                  await slackClient.chat.postEphemeral({
+                    channel: channelId,
+                    user: userId,
+                    text: `✓ Your approval recorded. ${progressText}`,
+                  });
+                } catch (updateErr) {
+                  logger.warn("Failed to send approval progress message", { approvalId, error: updateErr });
+                }
+              }
+            }
           } catch (err) {
             recordError("interactions.approval_approve", err, { userId, approvalId });
             logger.error("Approval button handler failed", { userId, approvalId, error: err });
