@@ -1,1 +1,0 @@
-ALTER TABLE "approvals" ADD COLUMN "approver_ids" text[];
