@@ -1,8 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
-import { eq } from "drizzle-orm";
 import type { ZodType } from "zod";
-import { db } from "../db/client.js";
 import { lookupPolicy, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
 import { logger } from "./logger.js";
 
