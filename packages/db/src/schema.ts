@@ -685,6 +685,7 @@ export const approvals = pgTable(
     requestedBy: text("requested_by").notNull().default("nova"),
     requestedInChannel: text("requested_in_channel"),
     approvedBy: text("approved_by").array(),
+    approverIds: text("approver_ids").array(),
     approvalMode: text("approval_mode").notNull().default("any_one"),
     requiredApprovals: integer("required_approvals").notNull().default(1),
     jobId: uuid("job_id").references(() => jobs.id),
