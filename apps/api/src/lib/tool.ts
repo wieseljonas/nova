@@ -3,18 +3,8 @@ import { tool, type Tool } from "ai";
 import { eq } from "drizzle-orm";
 import type { ZodType } from "zod";
 import { db } from "../db/client.js";
-import { actionLog } from "@aura/db/schema";
-import { lookupPolicy, requestApproval, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
+import { lookupPolicy, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
 import { logger } from "./logger.js";
-
-// ── Pending Approval Error ────────────────────────────────────────────────────
-
-export class PendingApprovalError extends Error {
-  constructor(public readonly actionLogId: string) {
-    super(`Action pending approval: ${actionLogId}`);
-    this.name = "PendingApprovalError";
-  }
-}
 
 // ── Execution Context (AsyncLocalStorage) ────────────────────────────────────
 
@@ -36,8 +26,6 @@ export const executionContext = new AsyncLocalStorage<ExecutionContext>();
 export interface SlackToolMetadata<TInput = any, TOutput = any> {
   /** Spinner label shown while tool is running. Can be static, sync, or async. */
   status: string | ((input: TInput) => string | Promise<string>);
-  /** Optional title used when a tool is waiting on human approval */
-  approvalStatus?: string | ((input: TInput) => string | undefined);
   /** Extract a short detail from input args for the in-progress card */
   detail?: (input: TInput) => string | undefined;
   /** Extract a short summary from result for the completed card */
@@ -101,97 +89,24 @@ export function defineTool<TInput, TOutput>(config: {
 
   const toolRef: ToolNameRef = {};
 
-  // Wrapped execute that logs to action_log (for read-tier tools)
-  const loggedExecute = async (input: TInput): Promise<TOutput> => {
+  // Wrapped execute that handles governance
+  const governedExecute = async (input: TInput): Promise<TOutput> => {
     const toolName = toolRef.name || "unknown";
     const ctx = executionContext.getStore() ?? {
       triggeredBy: "unknown",
       triggerType: "autonomous" as const,
     };
 
-    let logId: string | undefined;
-
-    try {
-      // Write the log entry before execution
-      try {
-        const [logEntry] = await db
-          .insert(actionLog)
-          .values({
-            toolName,
-            params: input as any,
-            triggerType: ctx.triggerType,
-            triggeredBy: ctx.triggeredBy,
-            jobId: ctx.jobId ?? null,
-            credentialName: (input as any)?.credential_name ?? null,
-            riskTier: "read",
-            status: "executed",
-          })
-          .returning({ id: actionLog.id });
-        logId = logEntry.id;
-      } catch (logErr) {
-        logger.warn("Governance: failed to write action_log entry", {
-          toolName,
-          error: logErr,
-        });
-      }
-
-      const result = await originalExecute(input);
-
-      // Update log with result
-      if (logId) {
-        try {
-          await db
-            .update(actionLog)
-            .set({ result: result as any })
-            .where(eq(actionLog.id, logId));
-        } catch { /* non-critical */ }
-      }
-
-      return result;
-    } catch (error: any) {
-      // Update log with failure status
-      if (logId) {
-        try {
-          await db
-            .update(actionLog)
-            .set({
-              status: "failed",
-              result: { error: error.message } as any,
-            })
-            .where(eq(actionLog.id, logId));
-        } catch { /* non-critical */ }
-      }
-      throw error;
-    }
-  };
-
-  const toolConfig: Record<string, unknown> = {
-    description: rest.description,
-    inputSchema: rest.inputSchema,
-    execute: loggedExecute,
-    // SDK-native approval: only gate http_request for now
-    needsApproval: async (input: TInput) => {
-      const toolName = toolRef.name || "unknown";
-
-      // Only http_request needs approval gating -- all other known tools pass through
-      // If toolRef.name is unset (unknown tool), fail-closed to require approval
-      if (toolName !== "http_request" && toolRef.name) {
-        return false;
-      }
-
-      const ctx = executionContext.getStore();
-      // Auto-approve in headless/job mode (no interactive user)
-      if (ctx?.triggerType === "scheduled_job" || ctx?.triggerType === "autonomous") {
-        return false;
-      }
-
+    // Only http_request needs approval gating
+    if (toolName === "http_request") {
       try {
         const httpInput = input as Record<string, unknown>;
         const credentialName = httpInput.credential_name as string | undefined;
         const method = (httpInput.method as string | undefined) ?? "GET";
+        const url = httpInput.url as string | undefined ?? "";
 
         // Check credential-level allowed methods
-        const credentialOwner = httpInput.credential_owner as string | undefined ?? ctx?.triggeredBy;
+        const credentialOwner = httpInput.credential_owner as string | undefined ?? ctx.triggeredBy;
         if (credentialName && credentialOwner) {
           const { getCredentialMethods } = await import("./api-credentials.js");
           const allowedMethods = await getCredentialMethods(credentialName, credentialOwner);
@@ -199,31 +114,79 @@ export function defineTool<TInput, TOutput>(config: {
             const methodUpper = method.toUpperCase();
             if (allowedMethods.map(m => m.toUpperCase()).includes(methodUpper)) {
               // Method is in the allowed list, skip approval
-              return false;
+              return originalExecute(input);
             }
           }
         }
 
         const policy = await lookupPolicy({
           toolName,
-          url: httpInput.url as string | undefined,
+          url,
           method,
           credentialName,
         });
-        const riskTier = effectiveRiskTier(
-          policy,
-          method,
-        );
-        // Write and destructive tiers need approval
-        return riskTier === "write" || riskTier === "destructive";
+
+        const { effectiveAction } = await import("./approval.js");
+        const action = effectiveAction(policy, method);
+
+        // Handle deny action
+        if (action === "deny") {
+          throw new Error(`Action denied by governance policy: ${policy?.name ?? "default"}`);
+        }
+
+        // Handle auto-approve action
+        if (action === "auto_approve") {
+          return originalExecute(input);
+        }
+
+        // Handle require_approval action
+        if (action === "require_approval") {
+          const { createProposal } = await import("./batch-executor.js");
+          const result = await createProposal({
+            title: `${method} ${url.split("?")[0]}`,
+            description: `Approval required for ${method} request to ${url}`,
+            credentialName,
+            items: [{
+              method,
+              url,
+              body: httpInput.body,
+              headers: httpInput.headers as Record<string, string> | undefined,
+            }],
+            requestedBy: ctx.triggeredBy,
+            requestedInChannel: ctx.channelId,
+          });
+
+          if (!result.ok) {
+            throw new Error(`Failed to create approval proposal: ${result.error}`);
+          }
+
+          // Return a special message to the LLM indicating approval is pending
+          return {
+            status: "awaiting_approval",
+            proposal_id: result.approvalId,
+            message: "This request has been submitted for approval. I'll execute it once approved.",
+          } as TOutput;
+        }
+
+        // Default: auto-approve
+        return originalExecute(input);
       } catch (err) {
-        logger.warn("needsApproval: policy lookup failed, failing closed (requiring approval)", {
+        logger.warn("Governance check failed, failing closed (denying)", {
           toolName,
           error: err,
         });
-        return true; // Fail-closed: require approval when policy lookup fails
+        throw err;
       }
-    },
+    }
+
+    // All other tools execute without approval
+    return originalExecute(input);
+  };
+
+  const toolConfig: Record<string, unknown> = {
+    description: rest.description,
+    inputSchema: rest.inputSchema,
+    execute: governedExecute,
   };
 
   if (rest.toModelOutput) {
