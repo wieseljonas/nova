@@ -21,6 +21,7 @@ export interface CreateProposalArgs {
   items: ProposalItem[];
   requestedBy: string;
   requestedInChannel?: string;
+  requestedInThread?: string;
   slackClient?: WebClient;
 }
 
@@ -47,7 +48,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   approvalId?: string;
   error?: string;
 }> {
-  const { title, description, credentialName, items, requestedBy, requestedInChannel, slackClient: injectedSlackClient } = args;
+  const { title, description, credentialName, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
 
   if (items.length === 0) {
     return { ok: false, error: "No items to approve" };
@@ -177,6 +178,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     }
 
     const resp = await slackClient.chat.postMessage({
+      ...(requestedInThread && { thread_ts: requestedInThread }),
       channel: targetChannel,
       text: `🔒 Approval required: ${title} — ${approverMentions}`,
       attachments: [

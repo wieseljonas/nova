@@ -63,6 +63,7 @@ Returns a proposal_id that tracks the batch through approval and execution.`,
       items: input.items as any,
       requestedBy: ctx.triggeredBy,
       requestedInChannel: ctx.channelId,
+      requestedInThread: ctx.threadTs,
     });
 
     if (result.ok) {
