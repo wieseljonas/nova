@@ -67,11 +67,11 @@ export function ConversationDetail({
           >
             {trace.sourceType === "job_execution" ? "job" : "interactive"}
           </Badge>
-          {trace.sourceType === "job_execution" && trace.jobExecutionId && jobId && (
-            <Link href={`/jobs/${jobId}/executions/${trace.jobExecutionId}`}>
+          {trace.sourceType === "job_execution" && jobId && (
+            <Link href={`/jobs/${jobId}`}>
               <Button variant="outline" size="sm">
                 <ExternalLink className="h-3.5 w-3.5" />
-                View execution
+                View job
               </Button>
             </Link>
           )}
