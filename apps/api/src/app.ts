@@ -760,6 +760,38 @@ app.post("/api/slack/interactions", async (c) => {
                 })
                 .where(eq(approvals.id, approvalId));
 
+              // Update Slack card to show approval status and remove buttons
+              if (approval?.slackChannel && approval.slackMessageTs) {
+                await slackClient.chat.update({
+                  channel: approval.slackChannel,
+                  ts: approval.slackMessageTs,
+                  text: `Approved by ${newApprovedBy.map((id: string) => `<@${id}>`).join(", ")}`,
+                  attachments: [
+                    {
+                      color: "#2eb67d",
+                      blocks: [
+                        {
+                          type: "section",
+                          text: {
+                            type: "mrkdwn",
+                            text: `*✅ ${approval.title}*`,
+                          },
+                        },
+                        {
+                          type: "context",
+                          elements: [
+                            {
+                              type: "mrkdwn",
+                              text: `Approved by ${newApprovedBy.map((id: string) => `<@${id}>`).join(", ")} · Execution starting...`,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                });
+              }
+
               const [job] = await db
                 .insert(jobs)
                 .values({

@@ -4,6 +4,7 @@ import { db } from "../db/client.js";
 import { approvals, approvalItems, approvalPolicies, type Approval, type ApprovalItem } from "@aura/db/schema";
 import { logger } from "./logger.js";
 import { lookupPolicy, effectiveRiskTier } from "./approval.js";
+import { isPrivateUrl } from "./ssrf.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -439,6 +440,15 @@ async function executeHttpRequest(args: {
   const { method, url, body, headers, credential } = args;
 
   try {
+    // SSRF guard — block private/internal addresses
+    if (await isPrivateUrl(url)) {
+      logger.warn("executeHttpRequest SSRF blocked", { url });
+      return {
+        ok: false,
+        error: "Blocked: URL resolves to a private/internal network address",
+      };
+    }
+
     const requestHeaders: Record<string, string> = { ...headers };
 
     // Add auth header if credential provided

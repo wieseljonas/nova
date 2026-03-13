@@ -88,8 +88,9 @@ export async function lookupPolicy(args: {
   for (const policy of rows) {
     if (args.toolName === "http_request") {
       // Check URL pattern match
-      if (policy.urlPattern && args.url) {
-        if (!matchUrlPattern(policy.urlPattern, args.url)) continue;
+      if (policy.urlPattern) {
+        // If policy has a URL pattern, URL must be provided and match
+        if (!args.url || !matchUrlPattern(policy.urlPattern, args.url)) continue;
       } else if (policy.toolPattern !== "http_request" && policy.toolPattern !== null) {
         continue;
       }
