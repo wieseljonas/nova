@@ -344,6 +344,13 @@
       "when": 1774003200000,
       "tag": "0048_unified_approval_system",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1774089600000,
+      "tag": "0049_remove_legacy_approval_system",
+      "breakpoints": true
     }
   ]
 }

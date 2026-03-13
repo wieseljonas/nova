@@ -353,8 +353,6 @@ export const jobs = pgTable(
     lastExecutionDate: text("last_execution_date"),
     enabled: integer("enabled").notNull().default(1),
     requiredCredentialIds: jsonb("required_credential_ids").$type<string[]>().default([]),
-    approvalStatus: text("approval_status"),
-    pendingActionLogId: uuid("pending_action_log_id"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),
   },
@@ -362,10 +360,6 @@ export const jobs = pgTable(
     uniqueIndex("jobs_name_idx").on(table.name),
     index("jobs_enabled_idx").on(table.enabled),
     index("jobs_status_execute_idx").on(table.status, table.executeAt),
-    check(
-      "jobs_approval_status_check",
-      sql`${table.approvalStatus} IS NULL OR ${table.approvalStatus} IN ('pending_approval','awaiting_approval','approved','rejected')`,
-    ),
   ],
 );
 
@@ -636,70 +630,6 @@ export const voiceCalls = pgTable(
   ],
 );
 
-// ── Action Log (governance audit trail) ──────────────────────────────────────
-
-export const actionLog = pgTable(
-  "action_log",
-  {
-    id: uuid("id")
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    toolName: text("tool_name").notNull(),
-    params: jsonb("params").notNull(),
-    triggerType: text("trigger_type").notNull(),
-    triggeredBy: text("triggered_by").notNull(),
-    jobId: uuid("job_id").references(() => jobs.id),
-    credentialName: text("credential_name"),
-    riskTier: text("risk_tier").notNull(),
-    status: text("status").notNull(),
-    result: jsonb("result"),
-    approvedBy: text("approved_by"),
-    approvedAt: timestamptz("approved_at"),
-    idempotencyKey: text("idempotency_key"),
-    // HITL resumption fields
-    conversationState: jsonb("conversation_state").$type<{
-      channelId: string;
-      threadTs?: string;
-      userId: string;
-      channelType: string;
-      messages: Array<{role: string; content: unknown; [key: string]: unknown}>; // Full AI SDK messages for replay on resumption
-      toolCallId: string; // Tool call ID needing approval
-      approvalId?: string; // SDK approval ID
-      assistantToolCall?: { toolName: string; toolCallId: string; input: unknown }; // The tool call that triggered approval
-      stablePrefix: string;
-      conversationContext: string;
-      dynamicContext?: string;
-      files?: any[];
-      teamId?: string;
-      timezone?: string;
-      modelId?: string;
-    }>(),
-    approvalMessageTs: text("approval_message_ts"),
-    approvalChannelId: text("approval_channel_id"),
-    summary: jsonb("summary").$type<{ title: string; body: string; details: string }>(),
-    createdAt: timestamptz("created_at").notNull().defaultNow(),
-  },
-  (table) => [
-    check(
-      "action_log_status_check",
-      sql`${table.status} IN ('executed','pending_approval','approved','rejected','failed')`,
-    ),
-    check(
-      "action_log_risk_tier_check",
-      sql`${table.riskTier} IN ('read','write','destructive')`,
-    ),
-    check(
-      "action_log_trigger_type_check",
-      sql`${table.triggerType} IN ('user_message','scheduled_job','autonomous')`,
-    ),
-    unique("action_log_idempotency_key_unique").on(table.idempotencyKey),
-    index("action_log_tool_name_idx").on(table.toolName),
-    index("action_log_triggered_by_idx").on(table.triggeredBy),
-    index("action_log_status_idx").on(table.status),
-    index("action_log_created_at_idx").on(table.createdAt),
-  ],
-);
-
 // ── Approval Policies (runtime governance config) ────────────────────────────
 
 export const approvalPolicies = pgTable(
@@ -844,8 +774,6 @@ export type Address = typeof addresses.$inferSelect;
 export type NewAddress = typeof addresses.$inferInsert;
 export type VoiceCall = typeof voiceCalls.$inferSelect;
 export type NewVoiceCall = typeof voiceCalls.$inferInsert;
-export type ActionLog = typeof actionLog.$inferSelect;
-export type NewActionLog = typeof actionLog.$inferInsert;
 export type ApprovalPolicy = typeof approvalPolicies.$inferSelect;
 export type NewApprovalPolicy = typeof approvalPolicies.$inferInsert;
 export type Approval = typeof approvals.$inferSelect;
