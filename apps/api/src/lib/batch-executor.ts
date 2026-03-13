@@ -178,7 +178,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     }
 
     const resp = await slackClient.chat.postMessage({
-      ...(requestedInThread && { thread_ts: requestedInThread }),
+      ...(requestedInThread && targetChannel === requestedInChannel && { thread_ts: requestedInThread }),
       channel: targetChannel,
       text: `🔒 Approval required: ${title} — ${approverMentions}`,
       attachments: [
