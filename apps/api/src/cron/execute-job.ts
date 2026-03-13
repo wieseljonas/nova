@@ -14,8 +14,10 @@ import {
   persistConversationSteps,
   persistConversationError,
   updateConversationTraceUsage,
-  type Step as ConversationStep,
+  buildConversationSteps,
 } from "./persist-conversation.js";
+import { buildStepUsages } from "../lib/cost-calculator.js";
+import type { DetailedTokenUsage } from "@aura/db/schema";
 
 const botToken = process.env.SLACK_BOT_TOKEN || "";
 const slackClient = new WebClient(botToken);
@@ -212,21 +214,7 @@ export async function executeJob(
     const { text, steps, totalUsage: usage } = generateResult;
 
     // Phase 2a: persist assistant steps now that generate succeeded
-    const conversationSteps: ConversationStep[] = steps.map((step) => ({
-      text: step.text,
-      reasoning: (step as any).reasoning,
-      toolCalls: step.toolCalls?.map((tc) => ({
-        toolCallId: tc.toolCallId,
-        toolName: tc.toolName,
-        input: tc.input,
-      })),
-      toolResults: step.toolResults?.map((tr) => ({
-        toolCallId: tr.toolCallId,
-        toolName: tr.toolName,
-        output: tr.output,
-      })),
-      finishReason: step.finishReason,
-    }));
+    const conversationSteps = buildConversationSteps(steps);
     await persistConversationSteps(conversationId, conversationSteps, conversationOrderIndex);
 
     const serializedSteps = steps.map((step) => ({
@@ -242,14 +230,18 @@ export async function executeJob(
       })),
     }));
 
-    const tokenUsage = {
+    const tokenUsage: DetailedTokenUsage = {
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
       totalTokens: usage.totalTokens ?? 0,
+      inputTokenDetails: usage.inputTokenDetails,
+      outputTokenDetails: usage.outputTokenDetails,
     };
 
-    // Update trace with token usage
-    await updateConversationTraceUsage(conversationId, tokenUsage);
+    const stepUsages = buildStepUsages(steps);
+
+    // Update trace with token usage + cost
+    await updateConversationTraceUsage(conversationId, tokenUsage, stepUsages);
 
     // Update execution trace with results
     await db

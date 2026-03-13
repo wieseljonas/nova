@@ -39,8 +39,10 @@ import {
   persistConversationInputs,
   persistConversationSteps,
   updateConversationTraceUsage,
-  type Step as ConversationStep,
+  buildConversationSteps,
 } from "../cron/persist-conversation.js";
+import { buildStepUsages, type StepUsage } from "../lib/cost-calculator.js";
+import type { DetailedTokenUsage } from "@aura/db/schema";
 import type { SlackEvent } from "./context.js";
 
 /** Maximum message length we'll process (characters). Slack max is ~40k. */
@@ -579,23 +581,6 @@ async function handleTransparencyCommands(
 
 const STEPS_PROMISE_TIMEOUT_MS = 5_000;
 
-function mapRawStepsToConversationSteps(rawSteps: any[]): ConversationStep[] {
-  return rawSteps.map((step: any) => ({
-    text: step.text,
-    reasoning: Array.isArray(step.reasoning) ? step.reasoning : undefined,
-    toolCalls: step.toolCalls?.map((tc: any) => ({
-      toolCallId: tc.toolCallId,
-      toolName: tc.toolName,
-      input: tc.input,
-    })),
-    toolResults: step.toolResults?.map((tr: any) => ({
-      toolCallId: tr.toolCallId,
-      toolName: tr.toolName,
-      output: tr.output,
-    })),
-    finishReason: step.finishReason,
-  }));
-}
 
 async function persistConversationTrace(params: {
   channelId: string;
@@ -605,7 +590,7 @@ async function persistConversationTrace(params: {
   systemPrompt: string;
   userPrompt: string;
   stepsPromise?: PromiseLike<any[]>;
-  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  usage?: DetailedTokenUsage;
   stepsTimeoutMs?: number;
 }): Promise<string> {
   const { channelId, threadTs, userId, modelId, systemPrompt, userPrompt, stepsPromise, usage, stepsTimeoutMs } = params;
@@ -620,6 +605,7 @@ async function persistConversationTrace(params: {
 
   const orderIndex = await persistConversationInputs(conversationId, systemPrompt, userPrompt);
 
+  let stepUsages: StepUsage[] = [];
   if (stepsPromise) {
     try {
       let rawSteps: any[];
@@ -636,8 +622,9 @@ async function persistConversationTrace(params: {
       } else {
         rawSteps = await stepsPromise;
       }
-      const conversationSteps = mapRawStepsToConversationSteps(rawSteps);
+      const conversationSteps = buildConversationSteps(rawSteps);
       await persistConversationSteps(conversationId, conversationSteps, orderIndex);
+      stepUsages = buildStepUsages(rawSteps);
     } catch (stepsErr: any) {
       logger.error("Failed to persist conversation steps (non-fatal)", {
         conversationId,
@@ -647,7 +634,7 @@ async function persistConversationTrace(params: {
   }
 
   if (usage) {
-    await updateConversationTraceUsage(conversationId, usage);
+    await updateConversationTraceUsage(conversationId, usage, stepUsages);
   }
 
   return conversationId;
@@ -779,7 +766,7 @@ async function runBackgroundTasks(params: {
   threadMessageCount: number;
   recentThreadMessages: Array<{ displayName: string; text: string }>;
   threadMessagesElided: boolean;
-  tokenUsage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  tokenUsage?: DetailedTokenUsage;
   modelId?: string;
   systemPrompt?: string;
   userPrompt?: string;

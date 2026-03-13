@@ -1,7 +1,8 @@
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { conversationTraces, conversationMessages, conversationParts } from "@aura/db/schema";
+import { conversationTraces, conversationMessages, conversationParts, type DetailedTokenUsage } from "@aura/db/schema";
 import { logger } from "../lib/logger.js";
+import { computeConversationCost, type StepUsage } from "../lib/cost-calculator.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,8 @@ export interface Step {
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   finishReason?: string;
+  modelId?: string;
+  usage?: DetailedTokenUsage;
 }
 
 type PartRow = {
@@ -69,6 +72,8 @@ function insertMessage(
   orderIndex: number,
   parts: PartRow[],
   content?: string | null,
+  modelId?: string | null,
+  tokenUsage?: DetailedTokenUsage | null,
 ) {
   const msgId = crypto.randomUUID();
 
@@ -78,6 +83,8 @@ function insertMessage(
     role,
     content: content ?? null,
     orderIndex,
+    modelId: modelId ?? null,
+    tokenUsage: tokenUsage ?? null,
   });
 
   if (parts.length === 0) return msgInsert;
@@ -131,6 +138,35 @@ function stepToParts(step: Step): PartRow[] {
   return parts;
 }
 
+/**
+ * Map raw AI SDK steps to ConversationStep (Step) objects for persistence.
+ */
+export function buildConversationSteps(rawSteps: any[]): Step[] {
+  return rawSteps.map((step: any) => ({
+    text: step.text,
+    reasoning: Array.isArray(step.reasoning) ? step.reasoning : undefined,
+    toolCalls: step.toolCalls?.map((tc: any) => ({
+      toolCallId: tc.toolCallId,
+      toolName: tc.toolName,
+      input: tc.input,
+    })),
+    toolResults: step.toolResults?.map((tr: any) => ({
+      toolCallId: tr.toolCallId,
+      toolName: tr.toolName,
+      output: tr.output,
+    })),
+    finishReason: step.finishReason,
+    modelId: step.response?.modelId,
+    usage: step.usage ? {
+      inputTokens: step.usage.inputTokens ?? 0,
+      outputTokens: step.usage.outputTokens ?? 0,
+      totalTokens: step.usage.totalTokens ?? 0,
+      inputTokenDetails: step.usage.inputTokenDetails,
+      outputTokenDetails: step.usage.outputTokenDetails,
+    } : undefined,
+  }));
+}
+
 // ── Phase 1: Persist inputs BEFORE generate ──────────────────────────────────
 // Saves system + user messages immediately so they survive crashes.
 // Returns the next orderIndex for assistant messages.
@@ -168,8 +204,17 @@ export async function persistConversationSteps(
 ): Promise<void> {
   try {
     for (let i = 0; i < steps.length; i++) {
-      const parts = stepToParts(steps[i]);
-      await insertMessage(conversationId, "assistant", startOrderIndex + i, parts);
+      const step = steps[i];
+      const parts = stepToParts(step);
+      await insertMessage(
+        conversationId,
+        "assistant",
+        startOrderIndex + i,
+        parts,
+        undefined,
+        step.modelId,
+        step.usage,
+      );
     }
 
     logger.info("persistConversationSteps: saved", {
@@ -221,12 +266,29 @@ export async function persistConversationError(
 
 export async function updateConversationTraceUsage(
   conversationId: string,
-  tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number },
+  tokenUsage: DetailedTokenUsage,
+  stepUsages?: StepUsage[],
 ): Promise<void> {
   try {
+    let costUsd: string | null = null;
+    if (stepUsages && stepUsages.length > 0) {
+      try {
+        const cost = await computeConversationCost(stepUsages);
+        if (cost > 0) costUsd = cost.toFixed(6);
+      } catch (costErr: any) {
+        logger.warn("updateConversationTraceUsage: cost computation failed (non-fatal)", {
+          conversationId,
+          error: costErr.message,
+        });
+      }
+    }
+
     await db
       .update(conversationTraces)
-      .set({ tokenUsage })
+      .set({
+        tokenUsage,
+        ...(costUsd != null && { costUsd }),
+      })
       .where(eq(conversationTraces.id, conversationId));
   } catch (err: any) {
     logger.error("updateConversationTraceUsage: failed (non-fatal)", {

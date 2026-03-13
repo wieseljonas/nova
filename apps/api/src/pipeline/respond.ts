@@ -10,6 +10,7 @@ import { getSlackMeta, getToolDescription, executionContext } from "../lib/tool.
 import { createInteractiveAgent } from "../lib/agents.js";
 import { getMainModel, buildCachedSystemMessages } from "../lib/ai.js";
 import { InvocationSupersededError } from "./prepare-step.js";
+import type { DetailedTokenUsage } from "@aura/db/schema";
 
 // ── Tool I/O Persistence ─────────────────────────────────────────────────────
 // Accumulated during streaming and attached as invisible Slack message metadata
@@ -168,11 +169,7 @@ export interface LLMResponse {
   /** Whether the response was already posted to Slack via streaming */
   alreadyPosted: boolean;
   /** Token usage */
-  usage?: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
+  usage?: DetailedTokenUsage;
   /** Tool calls executed during this response */
   toolCalls: ToolCallRecord[];
   /** Model ID used for this response */
@@ -1171,7 +1168,7 @@ export async function generateResponse(
     return {
       raw: finalText,
       alreadyPosted: true,
-      usage: { inputTokens, outputTokens, totalTokens },
+      usage: { inputTokens, outputTokens, totalTokens, inputTokenDetails: usage.inputTokenDetails, outputTokenDetails: usage.outputTokenDetails },
       toolCalls: toolCallRecords,
       modelId,
       stepsPromise: result.steps,
@@ -1280,6 +1277,8 @@ export async function generateResponse(
             inputTokens: retryInputTokens,
             outputTokens: retryOutputTokens,
             totalTokens: retryInputTokens + retryOutputTokens,
+            inputTokenDetails: retryUsage.inputTokenDetails,
+            outputTokenDetails: retryUsage.outputTokenDetails,
           },
           toolCalls: toolCallRecords,
           modelId,

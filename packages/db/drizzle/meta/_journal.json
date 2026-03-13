@@ -337,6 +337,13 @@
       "when": 1773916800000,
       "tag": "0047_credential_description",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1774003200000,
+      "tag": "0041_per_conversation_cost_tracking",
+      "breakpoints": true
     }
   ]
 }
