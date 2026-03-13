@@ -681,21 +681,11 @@ app.post("/api/slack/interactions", async (c) => {
 
         const approvePromise = (async () => {
           try {
-            const { approvals, jobs } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
+            const { approvals, jobs, approvalPolicies } = await import("@aura/db/schema");
+            const { eq, and } = await import("drizzle-orm");
             const { db } = await import("./db/client.js");
 
-            // Update approval status
-            await db
-              .update(approvals)
-              .set({
-                status: "approved",
-                approvedBy: [userId],
-                updatedAt: new Date(),
-              })
-              .where(eq(approvals.id, approvalId));
-
-            // Create a one-shot job to execute the batch
+            // Load approval to check policy
             const approvalRows = await db
               .select()
               .from(approvals)
@@ -704,10 +694,55 @@ app.post("/api/slack/interactions", async (c) => {
 
             const approval = approvalRows[0];
             if (!approval) {
-              logger.error("Approval not found after update", { approvalId });
+              logger.warn("Approval not found", { approvalId });
               return;
             }
 
+            // Check authorization
+            let authorized = false;
+            if (approval.policyId) {
+              const policyRows = await db
+                .select()
+                .from(approvalPolicies)
+                .where(eq(approvalPolicies.id, approval.policyId))
+                .limit(1);
+              const policy = policyRows[0];
+              if (policy?.approverIds && policy.approverIds.length > 0) {
+                authorized = policy.approverIds.includes(userId);
+              }
+            }
+
+            // Fallback to admin check if no policy approvers
+            if (!authorized) {
+              const adminIds = (process.env.AURA_ADMIN_USER_IDS ?? "")
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean);
+              authorized = adminIds.includes(userId);
+            }
+
+            if (!authorized) {
+              logger.warn("Unauthorized approval attempt", { approvalId, userId });
+              return;
+            }
+
+            // Atomic compare-and-set to prevent race condition
+            const updated = await db
+              .update(approvals)
+              .set({
+                status: "approved",
+                approvedBy: [userId],
+                updatedAt: new Date(),
+              })
+              .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
+              .returning({ id: approvals.id });
+
+            if (updated.length === 0) {
+              logger.info("Approval already processed", { approvalId, userId });
+              return;
+            }
+
+            // Create a one-shot job to execute the batch
             const [job] = await db
               .insert(jobs)
               .values({
@@ -758,21 +793,11 @@ app.post("/api/slack/interactions", async (c) => {
 
         const rejectPromise = (async () => {
           try {
-            const { approvals } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
+            const { approvals, approvalPolicies } = await import("@aura/db/schema");
+            const { eq, and } = await import("drizzle-orm");
             const { db } = await import("./db/client.js");
 
-            // Update approval status
-            await db
-              .update(approvals)
-              .set({
-                status: "rejected",
-                approvedBy: [userId],
-                updatedAt: new Date(),
-              })
-              .where(eq(approvals.id, approvalId));
-
-            // Update Slack card
+            // Load approval to check policy
             const approvalRows = await db
               .select()
               .from(approvals)
@@ -780,7 +805,50 @@ app.post("/api/slack/interactions", async (c) => {
               .limit(1);
 
             const approval = approvalRows[0];
-            if (approval?.slackChannel && approval.slackMessageTs) {
+            if (!approval) {
+              logger.warn("Approval not found", { approvalId });
+              return;
+            }
+
+            // Check authorization
+            let authorized = false;
+            if (approval.policyId) {
+              const policyRows = await db
+                .select()
+                .from(approvalPolicies)
+                .where(eq(approvalPolicies.id, approval.policyId))
+                .limit(1);
+              const policy = policyRows[0];
+              if (policy?.approverIds && policy.approverIds.length > 0) {
+                authorized = policy.approverIds.includes(userId);
+              }
+            }
+
+            // Fallback to admin check if no policy approvers
+            if (!authorized) {
+              const adminIds = (process.env.AURA_ADMIN_USER_IDS ?? "")
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean);
+              authorized = adminIds.includes(userId);
+            }
+
+            if (!authorized) {
+              logger.warn("Unauthorized rejection attempt", { approvalId, userId });
+              return;
+            }
+
+            // Update approval status (don't set approvedBy for rejections)
+            await db
+              .update(approvals)
+              .set({
+                status: "rejected",
+                updatedAt: new Date(),
+              })
+              .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")));
+
+            // Update Slack card
+            if (approval.slackChannel && approval.slackMessageTs) {
               await slackClient.chat.update({
                 channel: approval.slackChannel,
                 ts: approval.slackMessageTs,
