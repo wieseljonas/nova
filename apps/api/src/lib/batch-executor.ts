@@ -1,5 +1,5 @@
 import { WebClient } from "@slack/web-api";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { approvals, approvalItems, approvalPolicies, type Approval, type ApprovalItem } from "@aura/db/schema";
 import { logger } from "./logger.js";
@@ -327,7 +327,7 @@ export async function executeBatchProposal(args: {
           await db
             .update(approvalItems)
             .set({ status: "skipped" })
-            .where(eq(approvalItems.status, "pending"));
+            .where(and(eq(approvalItems.approvalId, approvalId), eq(approvalItems.status, "pending")));
           break;
         }
       }
