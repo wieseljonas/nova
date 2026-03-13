@@ -29,7 +29,6 @@ import {
   updateCredentialMethods,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
-import { handleApprovalReaction } from "./lib/approval.js";
 import { executionContext } from "./lib/tool.js";
 import { setSetting } from "./lib/settings.js";
 import { logger } from "./lib/logger.js";
@@ -205,39 +204,10 @@ app.post("/api/slack/events", async (c) => {
   if (body.event) {
     const event = body.event;
 
-    // Handle reaction events -- store as memory + governance approval
+    // Handle reaction events -- store as memory
     if (event.type === "reaction_added" && event.user && event.item) {
       const reactionPromise = (async () => {
         try {
-          // ── Governance: check if this is an approval/rejection reaction ──
-          if (
-            event.item?.type === "message" &&
-            ["white_check_mark", "x"].includes(event.reaction)
-          ) {
-            try {
-              const msgResult = await slackClient.conversations.history({
-                channel: event.item.channel,
-                latest: event.item.ts,
-                limit: 1,
-                inclusive: true,
-              });
-              const msg = msgResult.messages?.[0];
-              const actionLogId = (msg?.metadata as any)?.event_payload?.action_log_id;
-
-              if (actionLogId) {
-                await handleApprovalReaction({
-                  actionLogId,
-                  reaction: event.reaction,
-                  reactorUserId: event.user,
-                  slackClient,
-                });
-                return;
-              }
-            } catch (approvalErr) {
-              logger.warn("Failed to process approval reaction", { error: approvalErr });
-            }
-          }
-
           // ── Store as a lightweight memory via the store module ──
           let userName = event.user;
           try {
@@ -898,78 +868,6 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(reviewPromise);
       }
 
-      // ── Approval modal buttons (View more / View raw) ─────────────
-      if (action.action_id?.startsWith("approval_view_more_") && payload.trigger_id) {
-        const actionLogId = action.action_id.replace("approval_view_more_", "");
-        const viewMorePromise = (async () => {
-          try {
-            const { actionLog } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-            const { buildViewMoreModal } = await import("./lib/approval.js");
-
-            const rows = await db.select().from(actionLog).where(eq(actionLog.id, actionLogId)).limit(1);
-            const entry = rows[0];
-            if (!entry) {
-              logger.warn("View more: action_log entry not found", { actionLogId });
-              return;
-            }
-
-            const modal = buildViewMoreModal({
-              id: entry.id,
-              toolName: entry.toolName,
-              summary: entry.summary as any,
-              riskTier: entry.riskTier,
-              status: entry.status,
-            });
-
-            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
-          } catch (err) {
-            recordError("interactions.approval_view_more", err, { userId, actionLogId });
-            logger.error("View more modal failed", { userId, actionLogId, error: err });
-          }
-        })();
-        waitUntil(viewMorePromise);
-      }
-
-      if (action.action_id?.startsWith("approval_view_raw_") && payload.trigger_id && userId) {
-        const actionLogId = action.action_id.replace("approval_view_raw_", "");
-        const viewRawPromise = (async () => {
-          try {
-            if (!isAdmin(userId)) {
-              logger.warn("View raw: non-admin attempted access", { userId, actionLogId });
-              return;
-            }
-
-            const { actionLog } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-            const { buildViewRawModal } = await import("./lib/approval.js");
-
-            const rows = await db.select().from(actionLog).where(eq(actionLog.id, actionLogId)).limit(1);
-            const entry = rows[0];
-            if (!entry) {
-              logger.warn("View raw: action_log entry not found", { actionLogId });
-              return;
-            }
-
-            const modal = buildViewRawModal({
-              id: entry.id,
-              toolName: entry.toolName,
-              params: entry.params,
-              riskTier: entry.riskTier,
-              status: entry.status,
-              credentialName: entry.credentialName,
-            });
-
-            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
-          } catch (err) {
-            recordError("interactions.approval_view_raw", err, { userId, actionLogId });
-            logger.error("View raw modal failed", { userId, actionLogId, error: err });
-          }
-        })();
-        waitUntil(viewRawPromise);
-      }
     }
   }
 
