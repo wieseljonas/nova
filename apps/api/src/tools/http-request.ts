@@ -117,10 +117,8 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                 try {
                   basicParsed = JSON.parse(credResult.value);
                 } catch {
-                  return {
-                    ok: false as const,
-                    error: "basic credential value must be JSON {username, password}",
-                  };
+                  // Plain string value: treat as username with empty password (e.g. Close CRM API key)
+                  basicParsed = { username: credResult.value, password: "" };
                 }
                 const encoded = Buffer.from(
                   `${basicParsed.username}:${basicParsed.password ?? ""}`
