@@ -154,6 +154,7 @@ export function defineTool<TInput, TOutput>(config: {
             }],
             requestedBy: ctx.triggeredBy,
             requestedInChannel: ctx.channelId,
+            requestedInThread: ctx.threadTs,
           });
 
           if (!result.ok) {
