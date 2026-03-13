@@ -652,20 +652,10 @@ app.post("/api/slack/interactions", async (c) => {
         const approvePromise = (async () => {
           try {
             const { approvals, jobs } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
+            const { eq, sql } = await import("drizzle-orm");
             const { db } = await import("./db/client.js");
 
-            // Update approval status
-            await db
-              .update(approvals)
-              .set({
-                status: "approved",
-                approvedBy: [userId],
-                updatedAt: new Date(),
-              })
-              .where(eq(approvals.id, approvalId));
-
-            // Create a one-shot job to execute the batch
+            // Fetch current approval state
             const approvalRows = await db
               .select()
               .from(approvals)
@@ -674,7 +664,39 @@ app.post("/api/slack/interactions", async (c) => {
 
             const approval = approvalRows[0];
             if (!approval) {
-              logger.error("Approval not found after update", { approvalId });
+              logger.error("Approval not found", { approvalId });
+              return;
+            }
+
+            // Check if user already approved
+            const currentApprovers = approval.approvedBy ?? [];
+            if (currentApprovers.includes(userId)) {
+              logger.info("User already approved", { approvalId, userId });
+              return;
+            }
+
+            // Add user to approvers list
+            const newApprovers = [...currentApprovers, userId];
+            const requiredApprovals = approval.requiredApprovals ?? 1;
+            const isFullyApproved = newApprovers.length >= requiredApprovals;
+
+            // Update approval with new approver
+            await db
+              .update(approvals)
+              .set({
+                status: isFullyApproved ? "approved" : "pending",
+                approvedBy: newApprovers,
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            // Only create job and trigger execution if fully approved
+            if (!isFullyApproved) {
+              logger.info("Partial approval recorded", {
+                approvalId,
+                approvers: newApprovers.length,
+                required: requiredApprovals,
+              });
               return;
             }
 
