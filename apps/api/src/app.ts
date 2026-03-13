@@ -669,6 +669,20 @@ app.post("/api/slack/interactions", async (c) => {
               return;
             }
 
+            // Check if approval is still pending
+            if (approval.status !== "pending") {
+              logger.warn("Approval is not pending", { approvalId, status: approval.status, userId });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: `This approval has already been ${approval.status}.`,
+                });
+              }
+              return;
+            }
+
             // BUG FIX 1: Authorization check
             const approverIds = approval.approverIds ?? [];
             const isAuthorized = 
@@ -824,18 +838,9 @@ app.post("/api/slack/interactions", async (c) => {
             const { approvals } = await import("@aura/db/schema");
             const { eq } = await import("drizzle-orm");
             const { db } = await import("./db/client.js");
+            const { isAdmin } = await import("./lib/permissions.js");
 
-            // Update approval status
-            await db
-              .update(approvals)
-              .set({
-                status: "rejected",
-                approvedBy: [userId],
-                updatedAt: new Date(),
-              })
-              .where(eq(approvals.id, approvalId));
-
-            // Update Slack card
+            // First, fetch the current approval to check authorization and state
             const approvalRows = await db
               .select()
               .from(approvals)
@@ -843,6 +848,54 @@ app.post("/api/slack/interactions", async (c) => {
               .limit(1);
 
             const approval = approvalRows[0];
+            if (!approval) {
+              logger.error("Approval not found for rejection", { approvalId });
+              return;
+            }
+
+            // Check if approval is still pending
+            if (approval.status !== "pending") {
+              logger.warn("Rejection attempt on non-pending approval", { approvalId, status: approval.status, userId });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: `This approval has already been ${approval.status}.`,
+                });
+              }
+              return;
+            }
+
+            // Authorization check
+            const approverIds = approval.approverIds ?? [];
+            const isAuthorized = 
+              isAdmin(userId) || 
+              (approverIds.length === 0 ? isAdmin(userId) : approverIds.includes(userId));
+
+            if (!isAuthorized) {
+              logger.warn("Unauthorized rejection attempt", { approvalId, userId, approverIds });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: "You're not authorized to reject this.",
+                });
+              }
+              return;
+            }
+
+            // Update approval status
+            await db
+              .update(approvals)
+              .set({
+                status: "rejected",
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            // Update Slack card
             if (approval?.slackChannel && approval.slackMessageTs) {
               await slackClient.chat.update({
                 channel: approval.slackChannel,
