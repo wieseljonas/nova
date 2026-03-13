@@ -99,6 +99,11 @@ export function defineTool<TInput, TOutput>(config: {
 
     // Only http_request needs approval gating
     if (toolName === "http_request") {
+      // Skip approval in headless/job mode
+      if (ctx.triggerType === "scheduled_job" || ctx.triggerType === "autonomous") {
+        return originalExecute(input);
+      }
+
       try {
         const httpInput = input as Record<string, unknown>;
         const credentialName = httpInput.credential_name as string | undefined;
