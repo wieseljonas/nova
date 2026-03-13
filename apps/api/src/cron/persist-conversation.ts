@@ -144,7 +144,11 @@ function stepToParts(step: Step): PartRow[] {
 export function buildConversationSteps(rawSteps: any[]): Step[] {
   return rawSteps.map((step: any) => ({
     text: step.text,
-    reasoning: Array.isArray(step.reasoning) ? step.reasoning : undefined,
+    reasoning: step.reasoning
+      ? Array.isArray(step.reasoning)
+        ? step.reasoning.join("\n\n")
+        : String(step.reasoning)
+      : undefined,
     toolCalls: step.toolCalls?.map((tc: any) => ({
       toolCallId: tc.toolCallId,
       toolName: tc.toolName,

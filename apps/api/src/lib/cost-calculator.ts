@@ -13,7 +13,13 @@ interface PricingRow {
   pricePerMillion: string;
 }
 
-const pricingCache = new Map<string, PricingRow[]>();
+interface CachedPricing {
+  data: PricingRow[];
+  timestamp: number;
+}
+
+const pricingCache = new Map<string, CachedPricing>();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * Normalize a model ID for pricing lookup.
@@ -37,7 +43,12 @@ async function lookupPricing(
   asOfDate: Date,
 ): Promise<PricingRow[]> {
   const cacheKey = `${modelId}:${asOfDate.toISOString().slice(0, 10)}`;
-  if (pricingCache.has(cacheKey)) return pricingCache.get(cacheKey)!;
+  const cached = pricingCache.get(cacheKey);
+  const now = Date.now();
+
+  if (cached && now - cached.timestamp < CACHE_TTL_MS) {
+    return cached.data;
+  }
 
   const candidates = normalizeModelId(modelId);
 
@@ -60,12 +71,12 @@ async function lookupPricing(
       );
 
     if (rows.length > 0) {
-      pricingCache.set(cacheKey, rows);
+      pricingCache.set(cacheKey, { data: rows, timestamp: now });
       return rows;
     }
   }
 
-  pricingCache.set(cacheKey, []);
+  pricingCache.set(cacheKey, { data: [], timestamp: now });
   return [];
 }
 
