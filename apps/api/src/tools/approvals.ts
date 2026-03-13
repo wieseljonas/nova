@@ -208,7 +208,6 @@ Only workspace admins can create, update, or delete approval policies.`,
         if (input.approval_mode !== undefined) updates.approvalMode = input.approval_mode;
         if (input.approver_ids !== undefined) updates.approverIds = input.approver_ids;
         if (input.approval_channel !== undefined) updates.approvalChannel = input.approval_channel;
-        updates.updatedAt = new Date();
 
         if (Object.keys(updates).length === 0) {
           return {
@@ -216,6 +215,8 @@ Only workspace admins can create, update, or delete approval policies.`,
             error: "No fields to update",
           };
         }
+
+        updates.updatedAt = new Date();
 
         await db
           .update(approvalPolicies)
