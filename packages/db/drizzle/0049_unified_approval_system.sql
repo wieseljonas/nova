@@ -1,23 +1,39 @@
 -- Add new columns to approval_policies
-ALTER TABLE "approval_policies" ADD COLUMN "name" text;--> statement-breakpoint
-ALTER TABLE "approval_policies" ADD COLUMN "priority" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
-ALTER TABLE "approval_policies" ADD COLUMN "action" text DEFAULT 'require_approval' NOT NULL;--> statement-breakpoint
-ALTER TABLE "approval_policies" ADD COLUMN "approval_mode" text DEFAULT 'any_one' NOT NULL;--> statement-breakpoint
-ALTER TABLE "approval_policies" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+ALTER TABLE "approval_policies" ADD COLUMN IF NOT EXISTS "name" text;--> statement-breakpoint
+ALTER TABLE "approval_policies" ADD COLUMN IF NOT EXISTS "priority" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "approval_policies" ADD COLUMN IF NOT EXISTS "action" text DEFAULT 'require_approval' NOT NULL;--> statement-breakpoint
+ALTER TABLE "approval_policies" ADD COLUMN IF NOT EXISTS "approval_mode" text DEFAULT 'any_one' NOT NULL;--> statement-breakpoint
+ALTER TABLE "approval_policies" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
 
 -- Migrate existing data from riskTier to action
-UPDATE "approval_policies" SET "action" = CASE
-  WHEN "risk_tier" = 'read' THEN 'auto_approve'
-  ELSE 'require_approval'
-END;--> statement-breakpoint
+DO $$ BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'approval_policies' AND column_name = 'risk_tier'
+  ) THEN
+    UPDATE "approval_policies" SET "action" = CASE
+      WHEN "risk_tier" = 'read' THEN 'auto_approve'
+      ELSE 'require_approval'
+    END;
+  END IF;
+END $$;--> statement-breakpoint
 
 -- Drop old column and constraint
 ALTER TABLE "approval_policies" DROP CONSTRAINT IF EXISTS "approval_policies_risk_tier_check";--> statement-breakpoint
 ALTER TABLE "approval_policies" DROP COLUMN IF EXISTS "risk_tier";--> statement-breakpoint
 
 -- Add new constraints
-ALTER TABLE "approval_policies" ADD CONSTRAINT "approval_policies_action_check" CHECK ("action" IN ('require_approval','auto_approve','deny'));--> statement-breakpoint
-ALTER TABLE "approval_policies" ADD CONSTRAINT "approval_policies_approval_mode_check" CHECK ("approval_mode" IN ('any_one','all_must'));--> statement-breakpoint
+DO $$ BEGIN
+ ALTER TABLE "approval_policies" ADD CONSTRAINT "approval_policies_action_check" CHECK ("action" IN ('require_approval','auto_approve','deny'));
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;--> statement-breakpoint
+
+DO $$ BEGIN
+ ALTER TABLE "approval_policies" ADD CONSTRAINT "approval_policies_approval_mode_check" CHECK ("approval_mode" IN ('any_one','all_must'));
+EXCEPTION
+ WHEN duplicate_object THEN null;
+END $$;--> statement-breakpoint
 
 -- Seed default policies
 INSERT INTO "approval_policies" ("name", "priority", "http_methods", "action", "approval_mode", "created_by") VALUES
