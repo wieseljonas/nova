@@ -73,7 +73,7 @@ export function createCredentialTools(context?: ScheduleContext) {
       },
       slack: {
         status: "Retrieving credential...",
-        output: (r) => r.ok === false ? r.error : `Retrieved (${r.type})`,
+        output: (r) => r.ok === false ? r.error : `Retrieved (${r.auth_scheme})`,
       },
     }),
   };
