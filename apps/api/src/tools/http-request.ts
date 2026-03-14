@@ -63,6 +63,14 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           .number()
           .default(30_000)
           .describe("Request timeout in milliseconds (default 30s)"),
+        reason: z
+          .string()
+          .optional()
+          .describe(
+            "Brief context explaining WHY this request is being made. " +
+            "Shown to the human reviewer on the approval card. " +
+            "E.g. 'Creating a test lead for HITL testing as requested by Jonas'"
+          ),
       }),
       execute: async (input) => {
         try {
