@@ -365,6 +365,13 @@
       "when": 1774089600003,
       "tag": "0051_migration_reconciliation",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1774089600004,
+      "tag": "0052_approval_credential_owner",
+      "breakpoints": true
     }
   ]
 }
