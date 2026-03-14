@@ -17,7 +17,13 @@ interface ConversationData {
   jobId: string | null;
 }
 
-export function ConversationDetail({ data }: { data: ConversationData }) {
+export function ConversationDetail({
+  data,
+  embedded = false,
+}: {
+  data: ConversationData;
+  embedded?: boolean;
+}) {
   const { trace, conversation, jobName, jobId } = data;
 
   const tokenUsage = trace.tokenUsage as {
@@ -40,13 +46,17 @@ export function ConversationDetail({ data }: { data: ConversationData }) {
   return (
     <>
       <div className="flex items-center gap-3">
-        <Link href="/conversations">
-          <Button variant="ghost" size="icon">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
+        {!embedded && (
+          <Link href="/conversations">
+            <Button variant="ghost" size="icon">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          </Link>
+        )}
         <div>
-          <h1 className="text-base font-semibold">Conversation Detail</h1>
+          {!embedded && (
+            <h1 className="text-base font-semibold">Conversation Detail</h1>
+          )}
           <p className="text-xs text-muted-foreground font-mono">
             {trace.id}
           </p>
@@ -57,11 +67,11 @@ export function ConversationDetail({ data }: { data: ConversationData }) {
           >
             {trace.sourceType === "job_execution" ? "job" : "interactive"}
           </Badge>
-          {trace.sourceType === "job_execution" && trace.jobExecutionId && jobId && (
-            <Link href={`/jobs/${jobId}/executions/${trace.jobExecutionId}`}>
+          {trace.sourceType === "job_execution" && jobId && (
+            <Link href={`/jobs/${jobId}`}>
               <Button variant="outline" size="sm">
                 <ExternalLink className="h-3.5 w-3.5" />
-                View execution
+                View job
               </Button>
             </Link>
           )}

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { conversationTraces, conversationMessages, conversationParts, type DetailedTokenUsage } from "@aura/db/schema";
 import { logger } from "../lib/logger.js";
-import { computeConversationCost, type StepUsage } from "../lib/cost-calculator.js";
+import { computeConversationCost, sumStepUsages, type StepUsage } from "../lib/cost-calculator.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,9 +18,15 @@ interface ToolResult {
   output: unknown;
 }
 
+interface ReasoningPart {
+  type: "reasoning";
+  text: string;
+  providerMetadata?: Record<string, unknown>;
+}
+
 export interface Step {
   text: string;
-  reasoning?: string;
+  reasoning?: ReasoningPart[];
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   finishReason?: string;
@@ -112,8 +118,8 @@ function stepToParts(step: Step): PartRow[] {
 
   parts.push({ type: "step-start", orderIndex: idx++ });
 
-  if (step.reasoning) {
-    parts.push({ type: "reasoning", orderIndex: idx++, textValue: step.reasoning });
+  if (step.reasoning?.length) {
+    parts.push({ type: "reasoning", orderIndex: idx++, textValue: step.reasoning.map((r) => r.text).join('\n\n') });
   }
 
   if (step.toolCalls && step.toolCalls.length > 0) {
@@ -271,6 +277,14 @@ export async function updateConversationTraceUsage(
 ): Promise<void> {
   try {
     let costUsd: string | null = null;
+
+    // Use cumulative tokens from stepUsages when available (the SDK's
+    // tokenUsage is just the *last* step, not the sum of all steps).
+    const cumulativeUsage =
+      stepUsages && stepUsages.length > 0
+        ? sumStepUsages(stepUsages)
+        : tokenUsage;
+
     if (stepUsages && stepUsages.length > 0) {
       try {
         const cost = await computeConversationCost(stepUsages);
@@ -286,7 +300,7 @@ export async function updateConversationTraceUsage(
     await db
       .update(conversationTraces)
       .set({
-        tokenUsage,
+        tokenUsage: cumulativeUsage,
         ...(costUsd != null && { costUsd }),
       })
       .where(eq(conversationTraces.id, conversationId));
