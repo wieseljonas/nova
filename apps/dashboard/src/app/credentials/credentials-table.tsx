@@ -16,7 +16,7 @@ import { Plus, Search } from "lucide-react";
 interface CredentialRow {
   id: string;
   name: string;
-  type: string;
+  authScheme: string;
   ownerId: string;
   ownerName: string;
   expiresAt: Date | null;
@@ -37,7 +37,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
   const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newType, setNewType] = useState("token");
+  const [newAuthScheme, setNewAuthScheme] = useState("bearer");
   const [newValue, setNewValue] = useState("");
   const [newOwnerId, setNewOwnerId] = useState("");
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
@@ -59,13 +59,13 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
     if (!newName || !newValue || !newOwnerId) return;
     await createCredential({
       name: newName,
-      type: newType,
+      authScheme: newAuthScheme,
       value: newValue,
       ownerId: newOwnerId,
     });
     setShowCreate(false);
     setNewName("");
-    setNewType("token");
+    setNewAuthScheme("bearer");
     setNewValue("");
     setNewOwnerId("");
     router.refresh();
@@ -75,16 +75,16 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
     <>
       <div className="flex items-center gap-2">
         <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder="Search credentials..."
             value={searchValue}
             onChange={(e) => handleSearch(e.target.value)}
-            className="pl-9"
+            className="pl-8 h-8 text-[13px]"
           />
         </div>
         <Button size="sm" onClick={() => setShowCreate(true)}>
-          <Plus className="h-4 w-4" /> Add Credential
+          <Plus className="h-3.5 w-3.5 mr-1" /> Add
         </Button>
       </div>
 
@@ -92,7 +92,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
-            <TableHead className="w-[80px]">Type</TableHead>
+            <TableHead className="w-[80px]">Auth Scheme</TableHead>
             <TableHead className="w-[160px]">Owner</TableHead>
             <TableHead className="w-[70px]">Grants</TableHead>
             <TableHead className="w-[140px]">Expires</TableHead>
@@ -102,11 +102,11 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
           {credentials.map((cred) => (
             <TableRow key={cred.id}>
               <TableCell>
-                <Link href={`/credentials/${cred.id}`} className="font-medium hover:underline font-mono">
+                <Link href={`/credentials/${cred.id}`} className="text-primary underline font-mono">
                   {cred.name}
                 </Link>
               </TableCell>
-              <TableCell><Badge variant="secondary">{cred.type}</Badge></TableCell>
+              <TableCell><Badge variant="secondary">{cred.authScheme}</Badge></TableCell>
               <TableCell className="text-sm">{cred.ownerName}</TableCell>
               <TableCell>{cred.grantCount}</TableCell>
               <TableCell className="text-muted-foreground text-sm">{formatDate(cred.expiresAt)}</TableCell>
@@ -131,12 +131,16 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
         <div className="space-y-3">
           <Input placeholder="Name (lowercase, underscores)" value={newName} onChange={(e) => setNewName(e.target.value)} />
           <select
-            value={newType}
-            onChange={(e) => setNewType(e.target.value)}
+            value={newAuthScheme}
+            onChange={(e) => setNewAuthScheme(e.target.value)}
             className="h-8 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px]"
           >
-            <option value="token">Token</option>
+            <option value="bearer">Bearer</option>
+            <option value="basic">Basic</option>
+            <option value="header">Header</option>
+            <option value="query">Query</option>
             <option value="oauth_client">OAuth Client</option>
+            <option value="google_service_account">Google Service Account</option>
           </select>
           <Input placeholder="Owner Slack User ID" value={newOwnerId} onChange={(e) => setNewOwnerId(e.target.value)} />
           <Input type="password" placeholder="Value / Secret" value={newValue} onChange={(e) => setNewValue(e.target.value)} />

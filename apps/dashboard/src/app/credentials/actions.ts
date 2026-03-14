@@ -19,7 +19,7 @@ export async function getCredentials(search?: string, page = 1, limit = 100) {
     .select({
       id: credentials.id,
       name: credentials.name,
-      type: credentials.type,
+      authScheme: credentials.authScheme,
       ownerId: credentials.ownerId,
       expiresAt: credentials.expiresAt,
       createdAt: credentials.createdAt,
@@ -70,11 +70,11 @@ export async function getCredential(id: string) {
 
   const granteeNames: Record<string, string> = {};
   for (const g of grants) {
-    const [profile] = await db
+    const [user] = await db
       .select({ displayName: userProfiles.displayName })
       .from(userProfiles)
       .where(eq(userProfiles.slackUserId, g.granteeId));
-    granteeNames[g.granteeId] = profile?.displayName || g.granteeId;
+    granteeNames[g.granteeId] = user?.displayName || g.granteeId;
   }
 
   const auditLog = await db
@@ -101,22 +101,20 @@ export async function getCredential(id: string) {
 
 export async function createCredential(data: {
   name: string;
-  type: string;
+  authScheme: string;
   ownerId: string;
   value: string;
   expiresAt?: string;
-  tokenUrl?: string;
 }) {
   const encrypted = encryptCredential(data.value);
   const [cred] = await db
     .insert(credentials)
     .values({
       name: data.name,
-      type: data.type,
+      authScheme: data.authScheme,
       ownerId: data.ownerId,
       value: encrypted,
       expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
-      tokenUrl: data.tokenUrl || null,
     })
     .returning();
   revalidatePath("/credentials");
