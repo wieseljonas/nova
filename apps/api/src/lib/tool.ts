@@ -149,6 +149,7 @@ export function defineTool<TInput, TOutput>(config: {
             url,
             body: httpInput.body,
             itemCount: 1,
+            reason: httpInput.reason,
           });
           const result = await createProposal({
             title: summary.title,
