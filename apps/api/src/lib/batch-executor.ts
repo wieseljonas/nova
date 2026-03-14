@@ -304,8 +304,9 @@ export async function executeBatchProposal(args: {
           .update(approvals)
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(approvals.id, approvalId));
-        await updateApprovalCard(slackClient, approval, "failed", "Failed to load API credential");
-        return { ok: false, error: "Failed to load credential" };
+        const errMsg = `Failed to load credential '${approval.credentialName}' (owner: ${approval.credentialOwner ?? approval.requestedBy}). ${err instanceof Error ? err.message : ""}`.trim();
+        await updateApprovalCard(slackClient, approval, "failed", errMsg);
+        return { ok: false, error: errMsg };
       }
     }
 
