@@ -5,6 +5,7 @@ import type { ZodType } from "zod";
 import { db } from "../db/client.js";
 import { lookupPolicy, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
 import { logger } from "./logger.js";
+import { generateProposalSummary } from "./proposal-summary.js";
 
 // ── Execution Context (AsyncLocalStorage) ────────────────────────────────────
 
@@ -142,9 +143,16 @@ export function defineTool<TInput, TOutput>(config: {
         // Handle require_approval action
         if (action === "require_approval") {
           const { createProposal } = await import("./batch-executor.js");
+          const summary = generateProposalSummary({
+            credentialName,
+            method,
+            url,
+            body: httpInput.body,
+            itemCount: 1,
+          });
           const result = await createProposal({
-            title: `${method} ${url.split("?")[0]}`,
-            description: `Approval required for ${method} request to ${url}`,
+            title: summary.title,
+            description: summary.description,
             credentialName,
             items: [{
               method,
