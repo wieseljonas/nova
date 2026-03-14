@@ -173,12 +173,13 @@ export function generateProposalSummary(input: ProposalSummaryInput): ProposalSu
   const { credentialName, method, url, body, itemCount = 1 } = input;
   const methodUpper = method.toUpperCase();
 
-  // Try known patterns
+  // Try known patterns — strip query params before matching
+  const urlWithoutParams = url.split("?")[0];
   if (credentialName) {
     for (const pattern of ALL_PATTERNS) {
       if (pattern.credential !== credentialName) continue;
       if (pattern.methods && !pattern.methods.includes(methodUpper)) continue;
-      const match = url.match(pattern.urlMatch);
+      const match = urlWithoutParams.match(pattern.urlMatch);
       if (match) {
         return {
           title: pattern.title(match, methodUpper, body, itemCount),
