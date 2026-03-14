@@ -153,7 +153,7 @@ const BIGQUERY_PATTERNS: ApiPattern[] = [
       const query = typeof b?.query === "string" ? b.query : null;
       if (query) {
         const trimmed = query.trim().split("\n")[0].slice(0, 60);
-        return `Run BigQuery: ${trimmed}${query.length > 60 ? "..." : ""}`;
+        return `Run BigQuery: ${trimmed}${trimmed !== query.trim() ? "..." : ""}`;
       }
       return "Run BigQuery query";
     },
@@ -189,7 +189,13 @@ export function generateProposalSummary(input: ProposalSummaryInput): ProposalSu
   }
 
   // Fallback: generic but clean
-  const urlPath = new URL(url).pathname;
+  let urlPath: string;
+  try {
+    urlPath = new URL(url).pathname;
+  } catch {
+    // url may be empty, relative, or malformed — fall back to string splitting
+    urlPath = url.split("?")[0] || url || "/unknown";
+  }
   const shortUrl = urlPath.length > 60 ? urlPath.slice(0, 57) + "..." : urlPath;
   const credLabel = credentialName ? ` via ${credentialName}` : "";
 
