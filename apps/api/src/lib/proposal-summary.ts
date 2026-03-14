@@ -152,8 +152,10 @@ const BIGQUERY_PATTERNS: ApiPattern[] = [
       const b = body as Record<string, unknown> | null;
       const query = typeof b?.query === "string" ? b.query : null;
       if (query) {
-        const trimmed = query.trim().split("\n")[0].slice(0, 60);
-        return `Run BigQuery: ${trimmed}${query.length > 60 ? "..." : ""}`;
+        const fullQuery = query.trim();
+        const trimmed = fullQuery.split("\n")[0].slice(0, 60);
+        const wasTruncated = trimmed.length < fullQuery.length || fullQuery.includes("\n");
+        return `Run BigQuery: ${trimmed}${wasTruncated ? "..." : ""}`;
       }
       return "Run BigQuery query";
     },
@@ -189,7 +191,13 @@ export function generateProposalSummary(input: ProposalSummaryInput): ProposalSu
   }
 
   // Fallback: generic but clean
-  const urlPath = new URL(url).pathname;
+  let urlPath: string;
+  try {
+    urlPath = new URL(url).pathname;
+  } catch {
+    // Invalid or empty URL - use raw URL or a placeholder
+    urlPath = url || "/";
+  }
   const shortUrl = urlPath.length > 60 ? urlPath.slice(0, 57) + "..." : urlPath;
   const credLabel = credentialName ? ` via ${credentialName}` : "";
 
