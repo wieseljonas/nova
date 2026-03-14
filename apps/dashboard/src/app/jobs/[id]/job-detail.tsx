@@ -10,11 +10,11 @@ import { ArrowLeft } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import type { Job, JobExecution } from "@schema";
 
-type ExecutionWithCost = JobExecution & { costUsd: string | null };
+type ExecutionWithTrace = JobExecution & { costUsd: string | null; conversationTraceId: string | null };
 
 interface JobData {
   job: Job;
-  executions: ExecutionWithCost[];
+  executions: ExecutionWithTrace[];
 }
 
 export function JobDetail({ data }: { data: JobData }) {
@@ -75,24 +75,28 @@ export function JobDetail({ data }: { data: JobData }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Started</TableHead>
-                <TableHead>Finished</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Cost</TableHead>
-                <TableHead>Trigger</TableHead>
+                <TableHead className="w-[140px]">Started</TableHead>
+                <TableHead className="w-[140px]">Finished</TableHead>
+                <TableHead className="w-[80px]">Status</TableHead>
+                <TableHead className="w-[80px]">Cost</TableHead>
+                <TableHead className="w-[80px]">Trigger</TableHead>
                 <TableHead>Error</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {executions.map((exec) => (
-                <TableRow key={exec.id} className="cursor-pointer hover:bg-muted/50">
+                <TableRow key={exec.id} className={exec.conversationTraceId ? "cursor-pointer hover:bg-muted/50" : ""}>
                   <TableCell className="text-sm">
-                    <Link
-                      href={`/jobs/${job.id}/executions/${exec.id}`}
-                      className="hover:underline"
-                    >
-                      {formatDate(exec.startedAt)}
-                    </Link>
+                    {exec.conversationTraceId ? (
+                      <Link
+                        href={`/conversations/${exec.conversationTraceId}`}
+                        className="hover:underline"
+                      >
+                        {formatDate(exec.startedAt)}
+                      </Link>
+                    ) : (
+                      formatDate(exec.startedAt)
+                    )}
                   </TableCell>
                   <TableCell className="text-sm">{formatDate(exec.finishedAt)}</TableCell>
                   <TableCell>
