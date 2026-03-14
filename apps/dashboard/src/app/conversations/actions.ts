@@ -247,7 +247,6 @@ export async function getThreads(
     }
   }
 
-  const allTraceIds = threadRows.map((t) => t.firstTraceId).filter(Boolean);
   const allChannelThreadKeys = threadRows.map(
     (t) => `${t.channelId}::${t.threadTs}`,
   );

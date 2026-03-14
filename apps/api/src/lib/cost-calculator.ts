@@ -189,16 +189,19 @@ export function sumStepUsages(steps: StepUsage[]): DetailedTokenUsage {
   let hasOutputDetails = false;
 
   for (const step of steps) {
-    inputTokens += step.usage.inputTokens ?? 0;
+    const stepInputTokens = step.usage.inputTokens ?? 0;
+    inputTokens += stepInputTokens;
     outputTokens += step.usage.outputTokens ?? 0;
     totalTokens += step.usage.totalTokens ?? 0;
 
     const id = step.usage.inputTokenDetails;
     if (id) {
       hasInputDetails = true;
-      noCacheTokens += id.noCacheTokens ?? 0;
-      cacheReadTokens += id.cacheReadTokens ?? 0;
-      cacheWriteTokens += id.cacheWriteTokens ?? 0;
+      const stepCacheReadTokens = id.cacheReadTokens ?? 0;
+      const stepCacheWriteTokens = id.cacheWriteTokens ?? 0;
+      noCacheTokens += id.noCacheTokens ?? Math.max(0, stepInputTokens - stepCacheReadTokens - stepCacheWriteTokens);
+      cacheReadTokens += stepCacheReadTokens;
+      cacheWriteTokens += stepCacheWriteTokens;
     }
 
     const od = step.usage.outputTokenDetails;
