@@ -51,10 +51,10 @@ ${bodyPreview ? `- Request body:\n\`\`\`json\n${bodyPreview}\n\`\`\`` : "- No re
 ${itemCount > 1 ? `- Batch size: ${itemCount} items` : ""}
 
 Respond with exactly two sections:
-TITLE: A short (max 80 chars) action-oriented title. Include the key entity name. Examples: "Create lead 'Acme Corp' in Close CRM", "Delete contact john@example.com"
+TITLE: A short (max 80 chars) action-oriented title. Include the key entity name. Examples: "Create lead 'Acme Corp' in Close CRM", "Delete contact john@example.com". IMPORTANT: Use plain text only -- no asterisks, underscores, or other formatting characters.
 DESCRIPTION: A detailed summary of ALL inputs -- not just the main entity. List every meaningful field being set: custom fields, tags, status, contacts, emails, addresses, assigned users, amounts, dates, etc. Use bullet points if there are 3+ fields. The reviewer should be able to approve confidently without clicking "Review items". Do NOT just repeat the title. Be specific with actual values from the body.
 
-IMPORTANT formatting rules (this renders in Slack, NOT Markdown):
+IMPORTANT formatting rules for DESCRIPTION (this renders in Slack, NOT Markdown):
 - Bold: *text* (single asterisk, NOT **double**)
 - Italic: _text_ (single underscore)
 - Code: \`text\` (backticks work the same)
