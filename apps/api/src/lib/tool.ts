@@ -143,7 +143,7 @@ export function defineTool<TInput, TOutput>(config: {
         // Handle require_approval action
         if (action === "require_approval") {
           const { createProposal } = await import("./batch-executor.js");
-          const summary = generateProposalSummary({
+          const summary = await generateProposalSummary({
             credentialName,
             method,
             url,
