@@ -48,9 +48,9 @@ sequenceDiagram
     S->>DB: app.ts loads pending approval + auth check
 
     alt Approved
-      S->>DB: mark approval=approved; append approvedBy
+      S->>DB: mark approval=approved and append approvedBy
       S->>E: executeBatchProposal(approvalId)
-      E->>DB: mark executing; load approval_items
+      E->>DB: mark executing and load approval_items
       loop each item
         E->>API: execute HTTP request with injected credential auth
         API-->>E: response
