@@ -82,35 +82,54 @@ export async function generateProposalSummary(input: ProposalSummaryInput): Prom
 Your job: make it instantly clear *what* will happen, *to what*, and *with what data*. The reviewer should never need to click "Review items" or inspect raw JSON.
 
 Rules:
-- Translate API/technical field names to plain English (e.g. "custom.cf_xyz" → describe the value, "contacts[0].emails" → "Contact email")
-- Use Slack mrkdwn: *bold* for field labels, • for bullet points. NOT Markdown (**bold** is wrong).
+- Translate API/technical field names to plain English (e.g. "custom.cf_xyz" -> describe the value, "contacts[0].emails" -> "Contact email")
+- Use Slack mrkdwn: *bold* for field labels, bullet points with bullet char. NOT Markdown (**bold** is wrong).
 - For creates: name the entity being created + list every field being set with actual values
 - For updates/patches: say what's changing with actual values
 - For deletes: say exactly what's being removed
+- For queries (e.g. BigQuery, SQL): summarize what's being queried and why
 - Never repeat the title in the description
-- Be specific with real values from the body — no generic "various fields will be set"
+- Be specific with real values from the body -- no generic "various fields will be set"
 ${riskNote}
+
+<example>
+INPUT:
+Service: Close CRM (FR)
+Method: POST
+URL: https://api.close.com/api/v1/lead/
+Body: {"name":"Acme Corp","description":"Enterprise prospect","contacts":[{"name":"Jane Doe","emails":[{"email":"jane@acme.com"}]}],"custom.cf_industry":"SaaS","custom.cf_deal_size":"50000"}
+
+OUTPUT:
+title: Create lead "Acme Corp" in Close CRM (FR)
+description: • *Lead name:* Acme Corp
+• *Description:* Enterprise prospect
+• *Contact:* Jane Doe (jane@acme.com)
+• *Industry:* SaaS
+• *Deal size:* 50,000
+</example>
+
+<example>
+INPUT:
+Service: bigquery
+Method: POST
+URL: https://bigquery.googleapis.com/bigquery/v2/projects/my-project/queries
+Reason: Checking lead counts by status
+Body: {"query":"SELECT status, COUNT(*) FROM dataset.leads GROUP BY status","useLegacySql":false}
+
+OUTPUT:
+title: BigQuery: lead counts by status
+description: • *Query:* Count leads grouped by status from dataset.leads
+• *Reason:* Checking lead counts by status
+</example>
+
+Now summarize this ACTUAL request (ignore the examples above -- they are only for formatting reference):
 
 Service: ${serviceName}
 Method: ${methodUpper}
 URL: ${url}
 ${reason ? `Reason: ${reason}` : ""}
 ${bodyPreview ? `Body:\n\`\`\`\n${bodyPreview}\n\`\`\`` : "No body"}
-${itemCount > 1 ? `Batch size: ${itemCount} items` : ""}
-
-Example input:
-POST https://api.close.com/api/v1/lead/
-Body: {"name":"Acme Corp","description":"Enterprise prospect","contacts":[{"name":"Jane Doe","emails":[{"email":"jane@acme.com"}]}],"custom.cf_industry":"SaaS","custom.cf_deal_size":"50000"}
-
-Example output:
-title: Create lead "Acme Corp" in Close CRM
-description: • *Lead name:* Acme Corp
-• *Description:* Enterprise prospect
-• *Contact:* Jane Doe (jane@acme.com)
-• *Industry:* SaaS
-• *Deal size:* 50,000
-
-Now summarize the request above.`;
+${itemCount > 1 ? `Batch size: ${itemCount} items` : ""}`;
 
   try {
     const { object } = await generateObject({
