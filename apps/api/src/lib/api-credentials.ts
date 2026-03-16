@@ -652,41 +652,6 @@ export async function addCredentialWriter(
   await audit(credentialId, cred.key, granterId, "grant", `grantee:${granteeId} permission:write`);
 }
 
-export async function removeCredentialAccess(
-  credentialId: string,
-  revokerId: string,
-  granteeId: string,
-): Promise<void> {
-  const rows = await db
-    .select()
-    .from(credentials)
-    .where(eq(credentials.id, credentialId))
-    .limit(1);
-
-  const cred = rows[0];
-  if (!cred) throw new Error("Credential not found");
-
-  const allowed = await hasPermission(cred.ownerUserId, credentialId, revokerId, "write");
-  if (!allowed && cred.ownerUserId !== revokerId) {
-    throw new Error("Only the owner or a writer can revoke access");
-  }
-
-  const readerIds = ((cred.readerUserIds as string[]) ?? []).filter(id => id !== granteeId);
-  const writerIds = ((cred.writerUserIds as string[]) ?? []).filter(id => id !== granteeId);
-  
-  await db
-    .update(credentials)
-    .set({ 
-      readerUserIds: readerIds as any,
-      writerUserIds: writerIds as any,
-      updatedAt: new Date()
-    })
-    .where(eq(credentials.id, credentialId));
-
-  await audit(credentialId, cred.key, revokerId, "revoke", `grantee:${granteeId}`);
-}
-
-
 export async function setCredentialDisplayName(
   name: string,
   ownerId: string,
@@ -714,38 +679,6 @@ export async function getCredentialDisplayName(
     .where(and(eq(credentials.ownerUserId, ownerId), eq(credentials.key, name)))
     .limit(1);
   return rows[0]?.displayName ?? null;
-}
-
-export async function setCredentialApprovalChannel(
-  credentialId: string,
-  requestingUserId: string,
-  channelId: string | null,
-): Promise<void> {
-  const rows = await db
-    .select()
-    .from(credentials)
-    .where(eq(credentials.id, credentialId))
-    .limit(1);
-
-  const cred = rows[0];
-  if (!cred) throw new Error("Credential not found");
-
-  if (cred.ownerUserId !== requestingUserId) {
-    throw new Error("Only the owner can update the approval channel");
-  }
-
-  await db
-    .update(credentials)
-    .set({ approvalSlackChannelId: channelId, updatedAt: new Date() })
-    .where(eq(credentials.id, credentialId));
-
-  await audit(
-    credentialId,
-    cred.key,
-    requestingUserId,
-    "update",
-    `approval_channel: ${channelId ?? "null"}`,
-  );
 }
 
 function scrubValue(error: unknown, plaintext: string): Error {

@@ -58,11 +58,6 @@ export function checkAccess(
     return 'auto_approve';
   }
   
-  // Owner or writer + read method -> auto approve (redundant but explicit)
-  if ((isOwner || isWriter) && !isWrite) {
-    return 'auto_approve';
-  }
-  
   // No access
   return 'denied';
 }

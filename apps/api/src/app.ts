@@ -24,7 +24,6 @@ import {
   deleteApiCredential,
   addCredentialReader,
   addCredentialWriter,
-  removeCredentialAccess,
   listApiCredentials,
   listAccessForCredentials,
   hasPermission,
