@@ -163,8 +163,8 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
       },
     ];
 
-    // Post to Slack (use policy channel if set, otherwise fallback to requestedInChannel)
-    const targetChannel = policy?.approvalChannel ?? requestedInChannel ?? process.env.AURA_DEFAULT_CHANNEL;
+    // Post to Slack
+    const targetChannel = requestedInChannel ?? process.env.AURA_DEFAULT_CHANNEL;
 
     if (!targetChannel) {
       logger.warn("createProposal: no channel to post approval to", { approvalId });

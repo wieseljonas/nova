@@ -777,7 +777,7 @@ export async function withApiCredential<T>(
       .select({ id: credentials.id })
       .from(credentials)
       .where(
-        and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)),
+        and(eq(credentials.ownerUserId, ownerId), eq(credentials.key, name)),
       )
       .limit(1);
     if (rows[0]) {

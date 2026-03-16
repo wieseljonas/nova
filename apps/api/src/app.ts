@@ -321,6 +321,50 @@ app.post("/api/slack/events", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Helper Functions ────────────────────────────────────────────────────────
+
+/** Extract credential value from modal state based on auth scheme */
+function extractCredentialValue(
+  values: Record<string, any> | undefined,
+  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account"
+): string | undefined {
+  if (authScheme === "oauth_client") {
+    const clientId = values?.cred_client_id_block?.cred_client_id?.value;
+    const clientSecret = values?.cred_client_secret_block?.cred_client_secret?.value;
+    const tokenUrl = values?.cred_token_url_block?.cred_token_url?.value;
+    if (clientId && clientSecret && tokenUrl) {
+      return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
+    }
+  } else if (authScheme === "basic") {
+    const username = values?.cred_username_block?.cred_username?.value;
+    const password = values?.cred_password_block?.cred_password?.value ?? "";
+    if (username) {
+      return JSON.stringify({ username, password });
+    }
+  } else if (authScheme === "header" || authScheme === "query") {
+    const key = values?.cred_key_block?.cred_key?.value;
+    const secret = values?.cred_secret_block?.cred_secret?.value;
+    if (key && secret) {
+      return JSON.stringify({ key, secret });
+    }
+  } else if (authScheme === "google_service_account") {
+    const jsonKey = values?.cred_gsa_json_block?.cred_gsa_json?.value;
+    const scopes = values?.cred_gsa_scopes_block?.cred_gsa_scopes?.value;
+    if (jsonKey) {
+      try {
+        const parsed = JSON.parse(jsonKey);
+        if (scopes) parsed.scopes = scopes;
+        return JSON.stringify(parsed);
+      } catch {
+        return undefined;
+      }
+    }
+  } else {
+    return values?.cred_value_block?.cred_value?.value;
+  }
+  return undefined;
+}
+
 // ── Slack Interactions Endpoint ─────────────────────────────────────────────
 
 app.post("/api/slack/interactions", async (c) => {
@@ -571,6 +615,7 @@ app.post("/api/slack/interactions", async (c) => {
             recordError("interactions.api_credential_access_modal", err, { userId, credId });
           });
           waitUntil(accessPromise);
+        }
       }
 
       // ── Confirmation buttons (Phase 4) ──────────────────────────────
@@ -1023,50 +1068,6 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(savePromise);
       }
     }
-
-
-/** Extract credential value from modal state based on auth scheme */
-function extractCredentialValue(
-  values: Record<string, any> | undefined,
-  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account"
-): string | undefined {
-  if (authScheme === "oauth_client") {
-    const clientId = values?.cred_client_id_block?.cred_client_id?.value;
-    const clientSecret = values?.cred_client_secret_block?.cred_client_secret?.value;
-    const tokenUrl = values?.cred_token_url_block?.cred_token_url?.value;
-    if (clientId && clientSecret && tokenUrl) {
-      return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
-    }
-  } else if (authScheme === "basic") {
-    const username = values?.cred_username_block?.cred_username?.value;
-    const password = values?.cred_password_block?.cred_password?.value ?? "";
-    if (username) {
-      return JSON.stringify({ username, password });
-    }
-  } else if (authScheme === "header" || authScheme === "query") {
-    const key = values?.cred_key_block?.cred_key?.value;
-    const secret = values?.cred_secret_block?.cred_secret?.value;
-    if (key && secret) {
-      return JSON.stringify({ key, secret });
-    }
-  } else if (authScheme === "google_service_account") {
-    const jsonKey = values?.cred_gsa_json_block?.cred_gsa_json?.value;
-    const scopes = values?.cred_gsa_scopes_block?.cred_gsa_scopes?.value;
-    if (jsonKey) {
-      // Embed scopes into the JSON key so they're stored together
-      try {
-        const parsed = JSON.parse(jsonKey);
-        if (scopes) parsed.scopes = scopes;
-        return JSON.stringify(parsed);
-      } catch {
-        return undefined; // Invalid JSON -- validation will catch this
-      }
-    }
-  } else {
-    return values?.cred_value_block?.cred_value?.value;
-  }
-  return undefined;
-}
 
     if (callbackId === "api_credential_add_submit" && userId) {
       if (!isAdmin(userId)) return c.json({});
