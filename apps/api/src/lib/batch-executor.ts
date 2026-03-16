@@ -529,7 +529,7 @@ export async function executeBatchProposal(args: {
           const syntheticEvent = {
             type: "message" as const,
             channel: approval.requestedInChannel,
-            ts: `synthetic-continuation-${approvalId}-${Date.now()}`,
+            ts: `${(Date.now() / 1000).toFixed(6)}`,
             thread_ts: approval.requestedInThread,
             text: `[Batch "${approval.title}" completed — results are in the thread above. Continue processing.]`,
             user: approval.requestedBy,
