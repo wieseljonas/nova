@@ -680,39 +680,6 @@ export const voiceCalls = pgTable(
   ],
 );
 
-// ── Approval Policies (runtime governance config) ────────────────────────────
-
-export const approvalPolicies = pgTable(
-  "approval_policies",
-  {
-    id: uuid("id")
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    name: text("name"),
-    priority: integer("priority").notNull().default(0),
-    toolPattern: text("tool_pattern"),
-    urlPattern: text("url_pattern"),
-    httpMethods: text("http_methods").array(),
-    credentialName: text("credential_name"),
-    action: text("action").notNull().default("require_approval"),
-    approvalMode: text("approval_mode").notNull().default("any_one"),
-    approverIds: text("approver_ids").array(),
-    approvalChannel: text("approval_channel"),
-    createdBy: text("created_by").notNull(),
-    createdAt: timestamptz("created_at").notNull().defaultNow(),
-    updatedAt: timestamptz("updated_at").notNull().defaultNow(),
-  },
-  (table) => [
-    check(
-      "approval_policies_action_check",
-      sql`${table.action} IN ('require_approval','auto_approve','deny')`,
-    ),
-    check(
-      "approval_policies_approval_mode_check",
-      sql`${table.approvalMode} IN ('any_one','all_must')`,
-    ),
-  ],
-);
 
 // ── Approvals (unified batch approval system) ───────────────────────────────
 
@@ -732,7 +699,6 @@ export const approvals = pgTable(
     totalItems: integer("total_items").notNull().default(1),
     completedItems: integer("completed_items").notNull().default(0),
     failedItems: integer("failed_items").notNull().default(0),
-    policyId: uuid("policy_id").references(() => approvalPolicies.id),
     requestedBy: text("requested_by").notNull().default("nova"),
     requestedInChannel: text("requested_in_channel"),
     approvedBy: text("approved_by").array(),
@@ -826,8 +792,6 @@ export type Address = typeof addresses.$inferSelect;
 export type NewAddress = typeof addresses.$inferInsert;
 export type VoiceCall = typeof voiceCalls.$inferSelect;
 export type NewVoiceCall = typeof voiceCalls.$inferInsert;
-export type ApprovalPolicy = typeof approvalPolicies.$inferSelect;
-export type NewApprovalPolicy = typeof approvalPolicies.$inferInsert;
 export type Approval = typeof approvals.$inferSelect;
 export type NewApproval = typeof approvals.$inferInsert;
 export type ApprovalItem = typeof approvalItems.$inferSelect;
@@ -870,12 +834,14 @@ export const credentials = pgTable(
     id: uuid("id")
       .primaryKey()
       .default(sql`gen_random_uuid()`),
-    ownerId: text("owner_id").notNull(),
-    name: text("name").notNull(),
+    ownerUserId: text("owner_user_id").notNull(),
+    key: text("key").notNull(),
     authScheme: text("auth_scheme").notNull().default("bearer"),
     value: text("value").notNull(),
     keyVersion: integer("key_version").notNull().default(1),
-    allowedMethods: text("allowed_methods").array(),
+    readerUserIds: jsonb("reader_user_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    writerUserIds: jsonb("writer_user_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    approvalSlackChannelId: text("approval_slack_channel_id"),
     displayName: text("display_name"),
     description: text("description"),
     sandboxEnvName: text("sandbox_env_name"),
@@ -884,10 +850,10 @@ export const credentials = pgTable(
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    unique("credentials_owner_id_name_unique").on(table.ownerId, table.name),
+    unique("credentials_owner_user_id_key_unique").on(table.ownerUserId, table.key),
     check(
-      "credentials_name_check",
-      sql`${table.name} ~ '^[a-z][a-z0-9_]{1,62}$'`,
+      "credentials_key_check",
+      sql`${table.key} ~ '^[a-z][a-z0-9_]{1,62}$'`,
     ),
     check(
       "credentials_auth_scheme_check",
@@ -896,33 +862,6 @@ export const credentials = pgTable(
   ],
 );
 
-export const credentialGrants = pgTable(
-  "credential_grants",
-  {
-    id: uuid("id")
-      .primaryKey()
-      .default(sql`gen_random_uuid()`),
-    credentialId: uuid("credential_id")
-      .notNull()
-      .references(() => credentials.id, { onDelete: "cascade" }),
-    granteeId: text("grantee_id").notNull(),
-    permission: text("permission").notNull(),
-    grantedBy: text("granted_by").notNull(),
-    grantedAt: timestamptz("granted_at").notNull().defaultNow(),
-    revokedAt: timestamptz("revoked_at"),
-  },
-  (table) => [
-    unique("credential_grants_credential_id_grantee_id_unique").on(
-      table.credentialId,
-      table.granteeId,
-    ),
-    index("idx_grants_grantee").on(table.granteeId),
-    check(
-      "credential_grants_permission_check",
-      sql`${table.permission} IN ('read', 'write', 'admin')`,
-    ),
-  ],
-);
 
 export const credentialAuditLog = pgTable(
   "credential_audit_log",
@@ -951,8 +890,6 @@ export const credentialAuditLog = pgTable(
 
 export type Credential = typeof credentials.$inferSelect;
 export type NewCredential = typeof credentials.$inferInsert;
-export type CredentialGrant = typeof credentialGrants.$inferSelect;
-export type NewCredentialGrant = typeof credentialGrants.$inferInsert;
 export type CredentialAuditEntry = typeof credentialAuditLog.$inferSelect;
 export type NewCredentialAuditEntry = typeof credentialAuditLog.$inferInsert;
 
