@@ -7,6 +7,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Pagination } from "@/components/pagination";
 import { formatDate } from "@/lib/utils";
@@ -24,56 +26,238 @@ interface CredentialRow {
   accessCount: number;
 }
 
+type AuthScheme = "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account";
+
+interface SecretPayloadInput {
+  token?: string;
+  username?: string;
+  password?: string;
+  key?: string;
+  secret?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tokenUrl?: string;
+  serviceAccountJson?: string;
+}
+
+interface CredentialFilters {
+  ownerUserId: string;
+  authScheme: string;
+  expired: string;
+  hasAccessUserId: string;
+}
+
 interface Props {
   credentials: CredentialRow[];
   total: number;
   page: number;
   pageSize: number;
+  initialFilters: CredentialFilters;
 }
 
-export function CredentialsTable({ credentials, total, page, pageSize }: Props) {
+function AuthSecretFields({
+  authScheme,
+  secret,
+  setSecret,
+}: {
+  authScheme: AuthScheme;
+  secret: SecretPayloadInput;
+  setSecret: (updater: (prev: SecretPayloadInput) => SecretPayloadInput) => void;
+}) {
+  if (authScheme === "bearer") {
+    return (
+      <Input
+        type="password"
+        placeholder="Bearer token"
+        value={secret.token ?? ""}
+        onChange={(e) => setSecret((prev) => ({ ...prev, token: e.target.value }))}
+      />
+    );
+  }
+
+  if (authScheme === "basic") {
+    return (
+      <div className="space-y-2">
+        <Input
+          placeholder="Username"
+          value={secret.username ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, username: e.target.value }))}
+        />
+        <Input
+          type="password"
+          placeholder="Password (optional)"
+          value={secret.password ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, password: e.target.value }))}
+        />
+      </div>
+    );
+  }
+
+  if (authScheme === "header" || authScheme === "query") {
+    return (
+      <div className="space-y-2">
+        <Input
+          placeholder={authScheme === "header" ? "Header key (e.g. X-API-Key)" : "Query key (e.g. api_key)"}
+          value={secret.key ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, key: e.target.value }))}
+        />
+        <Input
+          type="password"
+          placeholder="Secret value"
+          value={secret.secret ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, secret: e.target.value }))}
+        />
+      </div>
+    );
+  }
+
+  if (authScheme === "oauth_client") {
+    return (
+      <div className="space-y-2">
+        <Input
+          placeholder="Client ID"
+          value={secret.clientId ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, clientId: e.target.value }))}
+        />
+        <Input
+          type="password"
+          placeholder="Client secret"
+          value={secret.clientSecret ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, clientSecret: e.target.value }))}
+        />
+        <Input
+          placeholder="Token URL"
+          value={secret.tokenUrl ?? ""}
+          onChange={(e) => setSecret((prev) => ({ ...prev, tokenUrl: e.target.value }))}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <Textarea
+      className="min-h-[140px] font-mono text-xs"
+      placeholder='Paste full service account JSON (must include "private_key" and "client_email")'
+      value={secret.serviceAccountJson ?? ""}
+      onChange={(e) => setSecret((prev) => ({ ...prev, serviceAccountJson: e.target.value }))}
+    />
+  );
+}
+
+export function CredentialsTable({ credentials, total, page, pageSize, initialFilters }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [newKey, setNewKey] = useState("");
-  const [newAuthScheme, setNewAuthScheme] = useState("bearer");
-  const [newValue, setNewValue] = useState("");
+  const [newAuthScheme, setNewAuthScheme] = useState<AuthScheme>("bearer");
   const [newOwnerUserId, setNewOwnerUserId] = useState("");
+  const [newDisplayName, setNewDisplayName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [newApprovalChannel, setNewApprovalChannel] = useState("");
+  const [newExpiresAt, setNewExpiresAt] = useState("");
+  const [newSecret, setNewSecret] = useState<SecretPayloadInput>({});
+  const [createError, setCreateError] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
+  const [ownerFilter, setOwnerFilter] = useState(initialFilters.ownerUserId);
+  const [authSchemeFilter, setAuthSchemeFilter] = useState(initialFilters.authScheme);
+  const [expiredFilter, setExpiredFilter] = useState(initialFilters.expired);
+  const [hasAccessFilter, setHasAccessFilter] = useState(initialFilters.hasAccessUserId);
 
-  function handleSearch(value: string) {
-    setSearchValue(value);
+  function applyUrl(paramsUpdate: {
+    search?: string;
+    owner?: string;
+    authScheme?: string;
+    expired?: string;
+    hasAccess?: string;
+  }) {
     const params = new URLSearchParams(searchParams.toString());
-    if (value) {
-      params.set("search", value);
-    } else {
-      params.delete("search");
+    const entries: Array<{ key: keyof typeof paramsUpdate; value: string | undefined }> = [
+      { key: "search", value: paramsUpdate.search },
+      { key: "owner", value: paramsUpdate.owner },
+      { key: "authScheme", value: paramsUpdate.authScheme },
+      { key: "expired", value: paramsUpdate.expired },
+      { key: "hasAccess", value: paramsUpdate.hasAccess },
+    ];
+
+    for (const entry of entries) {
+      if (entry.value) {
+        params.set(entry.key, entry.value);
+      } else {
+        params.delete(entry.key);
+      }
     }
+
     params.delete("page");
     const qs = params.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname);
   }
 
-  async function handleCreate() {
-    if (!newKey || !newValue || !newOwnerUserId) return;
-    await createCredential({
-      key: newKey,
-      authScheme: newAuthScheme,
-      value: newValue,
-      ownerUserId: newOwnerUserId,
+  function handleSearch(value: string) {
+    setSearchValue(value);
+    applyUrl({
+      search: value,
+      owner: ownerFilter,
+      authScheme: authSchemeFilter,
+      expired: expiredFilter,
+      hasAccess: hasAccessFilter,
     });
-    setShowCreate(false);
-    setNewKey("");
-    setNewAuthScheme("bearer");
-    setNewValue("");
-    setNewOwnerUserId("");
-    router.refresh();
+  }
+
+  function handleFilterChange(next: {
+    owner?: string;
+    authScheme?: string;
+    expired?: string;
+    hasAccess?: string;
+  }) {
+    const owner = next.owner ?? ownerFilter;
+    const authScheme = next.authScheme ?? authSchemeFilter;
+    const expired = next.expired ?? expiredFilter;
+    const hasAccess = next.hasAccess ?? hasAccessFilter;
+    applyUrl({
+      search: searchValue,
+      owner,
+      authScheme,
+      expired,
+      hasAccess,
+    });
+  }
+
+  async function handleCreate() {
+    setCreateError("");
+    setIsCreating(true);
+    try {
+      await createCredential({
+        key: newKey,
+        authScheme: newAuthScheme,
+        ownerUserId: newOwnerUserId,
+        secret: newSecret,
+        displayName: newDisplayName,
+        description: newDescription,
+        approvalSlackChannelId: newApprovalChannel,
+        expiresAt: newExpiresAt || undefined,
+      });
+      setShowCreate(false);
+      setNewKey("");
+      setNewAuthScheme("bearer");
+      setNewOwnerUserId("");
+      setNewDisplayName("");
+      setNewDescription("");
+      setNewApprovalChannel("");
+      setNewExpiresAt("");
+      setNewSecret({});
+      router.refresh();
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Failed to create credential");
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   return (
     <>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
@@ -83,6 +267,56 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
             className="pl-8 h-8 text-[13px]"
           />
         </div>
+        <Input
+          value={ownerFilter}
+          onChange={(e) => {
+            const value = e.target.value;
+            setOwnerFilter(value);
+            handleFilterChange({ owner: value });
+          }}
+          className="h-8 w-[180px] text-[13px]"
+          placeholder="Filter owner ID"
+        />
+        <Select
+          value={authSchemeFilter}
+          onChange={(e) => {
+            const value = e.target.value;
+            setAuthSchemeFilter(value);
+            handleFilterChange({ authScheme: value });
+          }}
+          className="h-8 w-[170px]"
+        >
+          <option value="">All auth schemes</option>
+          <option value="bearer">Bearer</option>
+          <option value="basic">Basic</option>
+          <option value="header">Header</option>
+          <option value="query">Query</option>
+          <option value="oauth_client">OAuth Client</option>
+          <option value="google_service_account">Google Service Account</option>
+        </Select>
+        <Select
+          value={expiredFilter}
+          onChange={(e) => {
+            const value = e.target.value;
+            setExpiredFilter(value);
+            handleFilterChange({ expired: value });
+          }}
+          className="h-8 w-[130px]"
+        >
+          <option value="">Expiry: any</option>
+          <option value="yes">Expired</option>
+          <option value="no">Active</option>
+        </Select>
+        <Input
+          value={hasAccessFilter}
+          onChange={(e) => {
+            const value = e.target.value;
+            setHasAccessFilter(value);
+            handleFilterChange({ hasAccess: value });
+          }}
+          className="h-8 w-[180px] text-[13px]"
+          placeholder="Has access user ID"
+        />
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus className="h-3.5 w-3.5 mr-1" /> Add
         </Button>
@@ -92,8 +326,8 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
         <TableHeader>
           <TableRow>
             <TableHead>Key</TableHead>
-            <TableHead className="w-[80px]">Auth Scheme</TableHead>
-            <TableHead className="w-[160px]">Owner</TableHead>
+            <TableHead className="w-20">Auth Scheme</TableHead>
+            <TableHead className="w-40">Owner</TableHead>
             <TableHead className="w-[70px]">Access</TableHead>
             <TableHead className="w-[140px]">Expires</TableHead>
           </TableRow>
@@ -128,12 +362,27 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
         <DialogHeader>
           <DialogTitle>Add Credential</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
           <Input placeholder="Key (lowercase, underscores)" value={newKey} onChange={(e) => setNewKey(e.target.value)} />
-          <select
+          <Input
+            placeholder="Display name (optional)"
+            value={newDisplayName}
+            onChange={(e) => setNewDisplayName(e.target.value)}
+          />
+          <Textarea
+            placeholder="Description (optional)"
+            value={newDescription}
+            onChange={(e) => setNewDescription(e.target.value)}
+          />
+          <Input
+            placeholder="Approval Slack channel ID (optional)"
+            value={newApprovalChannel}
+            onChange={(e) => setNewApprovalChannel(e.target.value)}
+          />
+          <Input type="datetime-local" value={newExpiresAt} onChange={(e) => setNewExpiresAt(e.target.value)} />
+          <Select
             value={newAuthScheme}
-            onChange={(e) => setNewAuthScheme(e.target.value)}
-            className="h-8 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px]"
+            onChange={(e) => setNewAuthScheme(e.target.value as AuthScheme)}
           >
             <option value="bearer">Bearer</option>
             <option value="basic">Basic</option>
@@ -141,12 +390,15 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
             <option value="query">Query</option>
             <option value="oauth_client">OAuth Client</option>
             <option value="google_service_account">Google Service Account</option>
-          </select>
+          </Select>
           <Input placeholder="Owner Slack User ID" value={newOwnerUserId} onChange={(e) => setNewOwnerUserId(e.target.value)} />
-          <Input type="password" placeholder="Value / Secret" value={newValue} onChange={(e) => setNewValue(e.target.value)} />
+          <AuthSecretFields authScheme={newAuthScheme} secret={newSecret} setSecret={setNewSecret} />
+          {createError ? <p className="text-sm text-destructive">{createError}</p> : null}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={handleCreate}>Create</Button>
+            <Button onClick={handleCreate} disabled={isCreating}>
+              {isCreating ? "Creating..." : "Create"}
+            </Button>
           </div>
         </div>
       </Dialog>
