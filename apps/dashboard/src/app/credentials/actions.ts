@@ -5,32 +5,13 @@ import { credentials, credentialAuditLog, userProfiles } from "@schema";
 import { and, desc, eq, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { encryptCredential, decryptCredential, maskCredential } from "@/lib/credentials";
 import { revalidatePath } from "next/cache";
-
-type AuthScheme =
-  | "bearer"
-  | "basic"
-  | "header"
-  | "query"
-  | "oauth_client"
-  | "google_service_account";
+import type { AuthScheme, SecretPayloadInput } from "./credential-secret";
 
 export interface CredentialListFilters {
   ownerUserId?: string;
   authScheme?: AuthScheme;
   expired?: "yes" | "no";
   hasAccessUserId?: string;
-}
-
-interface SecretPayloadInput {
-  token?: string;
-  username?: string;
-  password?: string;
-  key?: string;
-  secret?: string;
-  clientId?: string;
-  clientSecret?: string;
-  tokenUrl?: string;
-  serviceAccountJson?: string;
 }
 
 function requireText(value: string | undefined, field: string): string {
@@ -171,9 +152,11 @@ export async function getCredentials(
   if (filters.hasAccessUserId?.trim()) {
     const accessUserId = filters.hasAccessUserId.trim();
     clauses.push(
-      sql`${credentials.ownerUserId} = ${accessUserId}
+      sql`(
+        ${credentials.ownerUserId} = ${accessUserId}
         OR ${credentials.readerUserIds} @> ${JSON.stringify([accessUserId])}::jsonb
-        OR ${credentials.writerUserIds} @> ${JSON.stringify([accessUserId])}::jsonb`,
+        OR ${credentials.writerUserIds} @> ${JSON.stringify([accessUserId])}::jsonb
+      )`,
     );
   }
   const where = clauses.length > 0 ? and(...clauses) : undefined;
@@ -327,17 +310,36 @@ export async function createCredential(data: {
   return cred;
 }
 
-export async function updateCredentialValue(id: string, secret: SecretPayloadInput) {
-  const cred = await getCredentialById(id);
+export async function updateCredentialValue(data: {
+  credentialId: string;
+  actorUserId: string;
+  secret: SecretPayloadInput;
+}) {
+  const credentialId = requireText(data.credentialId, "Credential ID");
+  const actorUserId = requireText(data.actorUserId, "Acting user ID");
+  const cred = await getCredentialById(credentialId);
+  if (!canManage(cred, actorUserId)) {
+    throw new Error("Only the owner or a writer can update credential value");
+  }
+
   const authScheme = parseAuthScheme(cred.authScheme);
-  const normalizedSecret = normalizeSecretPayload(authScheme, secret);
+  const normalizedSecret = normalizeSecretPayload(authScheme, data.secret);
   const encrypted = encryptCredential(normalizedSecret);
 
   await db
     .update(credentials)
     .set({ value: encrypted, updatedAt: new Date() })
-    .where(eq(credentials.id, id));
-  revalidatePath(`/credentials/${id}`);
+    .where(eq(credentials.id, credentialId));
+
+  await db.insert(credentialAuditLog).values({
+    credentialId,
+    credentialName: cred.key,
+    accessedBy: actorUserId,
+    action: "update",
+    context: "credential value rotated via dashboard",
+  });
+
+  revalidatePath(`/credentials/${credentialId}`);
 }
 
 export async function grantCredentialAccess(data: {
