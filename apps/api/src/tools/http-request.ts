@@ -29,7 +29,9 @@ export function createHttpRequestTool(context?: ScheduleContext) {
         "Specify credential_name (e.g. 'close_fr') and credential_owner (Slack user ID) " +
         "to inject auth. The server resolves the credential from the encrypted store and " +
         "sets the Authorization header. You CANNOT pass Authorization, x-api-key, or " +
-        "x-auth-token headers directly -- use credential_name instead.",
+        "x-auth-token headers directly -- use credential_name instead. " +
+        "Responses larger than 20KB are automatically saved to a sandbox file; " +
+        "check the `truncated` field and use `run_command` with jq/python on the returned `path` to process.",
       inputSchema: z.object({
         method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
         url: z.string().url(),
@@ -157,23 +159,61 @@ export function createHttpRequestTool(context?: ScheduleContext) {
             signal: AbortSignal.timeout(input.timeout_ms),
           });
 
-          let responseBody: unknown;
-          const contentType = response.headers.get("content-type") ?? "";
-          if (contentType.includes("application/json")) {
-            responseBody = await response.json().catch(() => null);
-          }
-          if (responseBody === undefined || responseBody === null) {
-            const text = await response.text().catch(() => "");
-            responseBody =
-              text.length > 50_000 ? text.slice(0, 50_000) + "... (truncated)" : text;
+          const MAX_RESPONSE_BYTES = 25_000_000;
+          const MAX_INLINE_BYTES = 20_000;
+          const PREVIEW_BYTES = 4_000;
+
+          const contentLength = parseInt(response.headers.get("content-length") ?? "0", 10);
+          if (contentLength > MAX_RESPONSE_BYTES) {
+            return {
+              ok: false as const,
+              error: `Response too large (${contentLength} bytes). Maximum supported: ${MAX_RESPONSE_BYTES} bytes.`,
+              status: response.status,
+            };
           }
 
-          return {
+          const contentType = response.headers.get("content-type") ?? "";
+          const text = await response.text().catch(() => "");
+          const textBytes = Buffer.byteLength(text);
+
+          if (textBytes <= MAX_INLINE_BYTES) {
+            let responseBody: unknown = text;
+            if (contentType.includes("application/json")) {
+              try { responseBody = JSON.parse(text); } catch { /* keep as text */ }
+            }
+            return {
+              ok: response.ok as boolean,
+              status: response.status,
+              headers: Object.fromEntries(response.headers.entries()),
+              body: responseBody,
+            };
+          }
+
+          const preview = text.slice(0, PREVIEW_BYTES) + "…";
+          const baseResult = {
             ok: response.ok as boolean,
             status: response.status,
             headers: Object.fromEntries(response.headers.entries()),
-            body: responseBody,
+            body: preview,
+            truncated: true as const,
+            total_size_bytes: textBytes,
           };
+
+          if (process.env.E2B_API_KEY) {
+            try {
+              const { writeToSandbox } = await import("../lib/sandbox.js");
+              const { hostname } = new URL(input.url);
+              const ext = contentType.includes("json") ? "json" : "txt";
+              const filename = `${hostname.replace(/[^a-z0-9.-]/gi, "_")}-${Date.now()}.${ext}`;
+              const path = await writeToSandbox(filename, Buffer.from(text), "downloads/http");
+              return { ...baseResult, path };
+            } catch (e: any) {
+              logger.warn("http_request: failed to save large response to sandbox", { error: e.message });
+              return { ...baseResult, save_error: "Failed to save to sandbox; only preview available." };
+            }
+          }
+
+          return { ...baseResult, save_error: "Sandbox unavailable; only preview available." };
         } catch (error: any) {
           logger.error("http_request failed", { error: error.message, url: input.url });
           return { ok: false as const, error: `Request failed: ${error.message}` };
