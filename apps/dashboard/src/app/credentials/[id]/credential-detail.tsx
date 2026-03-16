@@ -24,7 +24,7 @@ import { AuthSecretFields } from "../credential-secret-fields";
 import type { AuthScheme, SecretPayloadInput } from "../credential-secret";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import type { Credential, CredentialAuditEntry } from "@schema";
+import type { Credential } from "@schema";
 
 interface CredentialData extends Credential {
   maskedValue: string;
@@ -32,7 +32,14 @@ interface CredentialData extends Credential {
   access: Array<{ userId: string; permission: "read" | "write" }>;
   userNames: Record<string, string>;
   knownUsers: Array<{ userId: string; label: string }>;
-  auditLog: CredentialAuditEntry[];
+  auditLog: Array<{
+    id: string;
+    action: string;
+    accessedBy: string;
+    actorDisplayName: string;
+    context: string | null;
+    timestamp: Date;
+  }>;
 }
 
 export function CredentialDetail({ data }: { data: CredentialData }) {
@@ -163,7 +170,7 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
 
   async function handleDelete() {
     if (!confirm("Delete this credential?")) return;
-    await deleteCredential(data.id);
+    await deleteCredential({ credentialId: data.id, actorUserId });
     router.push("/credentials");
   }
 
@@ -370,8 +377,26 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
               {data.auditLog.map((entry) => (
                 <TableRow key={entry.id}>
                   <TableCell><Badge variant="secondary">{entry.action}</Badge></TableCell>
-                  <TableCell className="text-sm">{entry.accessedBy}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{entry.context}</TableCell>
+                  <TableCell className="text-sm">
+                    <div>{entry.actorDisplayName}</div>
+                    {entry.actorDisplayName !== entry.accessedBy ? (
+                      <div className="text-xs text-muted-foreground">{entry.accessedBy}</div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {entry.context ? (
+                      (() => {
+                        try {
+                          const parsed = JSON.parse(entry.context);
+                          return <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(parsed, null, 2)}</pre>;
+                        } catch {
+                          return entry.context;
+                        }
+                      })()
+                    ) : (
+                      "—"
+                    )}
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{formatDate(entry.timestamp)}</TableCell>
                 </TableRow>
               ))}

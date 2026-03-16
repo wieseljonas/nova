@@ -257,6 +257,18 @@ export async function getCredential(id: string) {
     .orderBy(desc(credentialAuditLog.timestamp))
     .limit(50);
 
+  const auditActorIds = [...new Set(auditLog.map((entry) => entry.accessedBy))];
+  const auditActorMap: Record<string, string> = {};
+  if (auditActorIds.length > 0) {
+    const auditActors = await db
+      .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
+      .from(userProfiles)
+      .where(inArray(userProfiles.slackUserId, auditActorIds));
+    for (const actor of auditActors) {
+      auditActorMap[actor.slackUserId] = actor.displayName ?? actor.slackUserId;
+    }
+  }
+
   const knownUsers = await db
     .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
     .from(userProfiles)
@@ -276,7 +288,10 @@ export async function getCredential(id: string) {
           ? `${user.displayName} (${user.slackUserId})`
           : user.slackUserId,
     })),
-    auditLog,
+    auditLog: auditLog.map((entry) => ({
+      ...entry,
+      actorDisplayName: auditActorMap[entry.accessedBy] ?? entry.accessedBy,
+    })),
   };
 }
 
@@ -313,6 +328,24 @@ export async function createCredential(data: {
     })
     .returning();
 
+  await db.insert(credentialAuditLog).values({
+    credentialId: cred.id,
+    credentialName: cred.key,
+    accessedBy: ownerUserId,
+    action: "create",
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        ownerUserId,
+        authScheme,
+        displayName: normalizeOptional(data.displayName),
+        description: normalizeOptional(data.description),
+        approvalSlackChannelId: normalizeOptional(data.approvalSlackChannelId),
+        expiresAt: parseDate(data.expiresAt)?.toISOString() ?? null,
+      },
+    }),
+  });
+
   revalidatePath("/credentials");
   return cred;
 }
@@ -343,7 +376,13 @@ export async function updateCredentialValue(data: {
     credentialName: cred.key,
     accessedBy: actorUserId,
     action: "update",
-    context: "credential value rotated via dashboard",
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        operation: "rotate_value",
+        authScheme,
+      },
+    }),
   });
 
   revalidatePath(`/credentials/${credentialId}`);
@@ -390,7 +429,14 @@ export async function grantCredentialAccess(data: {
     credentialName: cred.key,
     accessedBy: actorUserId,
     action: "grant",
-    context: `grantee:${granteeUserId} permission:${data.permission}`,
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        operation: "grant_access",
+        granteeUserId,
+        permission: data.permission,
+      },
+    }),
   });
 
   revalidatePath("/credentials");
@@ -438,7 +484,14 @@ export async function revokeCredentialAccess(data: {
     credentialName: cred.key,
     accessedBy: actorUserId,
     action: "revoke",
-    context: `grantee:${granteeUserId} permission:${data.permission}`,
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        operation: "revoke_access",
+        granteeUserId,
+        permission: data.permission,
+      },
+    }),
   });
 
   revalidatePath("/credentials");
@@ -487,7 +540,14 @@ export async function updateCredentialAccessPermission(data: {
     credentialName: cred.key,
     accessedBy: actorUserId,
     action: "update",
-    context: `grantee:${granteeUserId} permission:${data.permission}`,
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        operation: "update_access_permission",
+        granteeUserId,
+        permission: data.permission,
+      },
+    }),
   });
 
   revalidatePath("/credentials");
@@ -526,14 +586,43 @@ export async function updateCredentialMetadata(data: {
     credentialName: cred.key,
     accessedBy: actorUserId,
     action: "update",
-    context: "metadata update via dashboard",
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        operation: "update_metadata",
+        displayName: normalizeOptional(data.displayName),
+        description: normalizeOptional(data.description),
+        approvalSlackChannelId: normalizeOptional(data.approvalSlackChannelId),
+        expiresAt: parseDate(data.expiresAt)?.toISOString() ?? null,
+      },
+    }),
   });
 
   revalidatePath("/credentials");
   revalidatePath(`/credentials/${credentialId}`);
 }
 
-export async function deleteCredential(id: string) {
-  await db.delete(credentials).where(eq(credentials.id, id));
+export async function deleteCredential(data: { credentialId: string; actorUserId: string }) {
+  const credentialId = requireText(data.credentialId, "Credential ID");
+  const actorUserId = requireText(data.actorUserId, "Acting user ID");
+  const cred = await getCredentialById(credentialId);
+  if (!canManage(cred, actorUserId)) {
+    throw new Error("Only the owner or a writer can delete credentials");
+  }
+
+  await db.insert(credentialAuditLog).values({
+    credentialId,
+    credentialName: cred.key,
+    accessedBy: actorUserId,
+    action: "delete",
+    context: JSON.stringify({
+      source: "dashboard",
+      request: {
+        operation: "delete_credential",
+      },
+    }),
+  });
+
+  await db.delete(credentials).where(eq(credentials.id, credentialId));
   revalidatePath("/credentials");
 }
