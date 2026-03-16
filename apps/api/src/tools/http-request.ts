@@ -30,7 +30,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
         "to inject auth. The server resolves the credential from the encrypted store and " +
         "sets the Authorization header. You CANNOT pass Authorization, x-api-key, or " +
         "x-auth-token headers directly -- use credential_name instead. " +
-        "Responses larger than 20KB are automatically saved to a sandbox file; " +
+        "Responses larger than 100KB are automatically saved to a sandbox file; " +
         "check the `truncated` field and use `run_command` with jq/python on the returned `path` to process.",
       inputSchema: z.object({
         method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
@@ -160,7 +160,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           });
 
           const MAX_RESPONSE_BYTES = 25_000_000;
-          const MAX_INLINE_BYTES = 20_000;
+          const MAX_INLINE_BYTES = 100_000;
           const PREVIEW_BYTES = 4_000;
 
           const contentLength = parseInt(response.headers.get("content-length") ?? "0", 10);
