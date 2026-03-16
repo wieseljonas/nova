@@ -173,7 +173,37 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           }
 
           const contentType = response.headers.get("content-type") ?? "";
-          const text = await response.text().catch(() => "");
+          
+          // Read body with incremental size checking to prevent OOM when Content-Length is absent
+          let text = "";
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          
+          if (reader) {
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value, { stream: true });
+                text += chunk;
+                
+                if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) {
+                  reader.cancel();
+                  return {
+                    ok: false as const,
+                    error: `Response too large (exceeds ${MAX_RESPONSE_BYTES} bytes). Streaming aborted.`,
+                    status: response.status,
+                  };
+                }
+              }
+              // Flush decoder
+              text += decoder.decode();
+            } catch (e: any) {
+              text = "";
+            }
+          }
+          
           const textBytes = Buffer.byteLength(text);
 
           if (textBytes <= MAX_INLINE_BYTES) {
