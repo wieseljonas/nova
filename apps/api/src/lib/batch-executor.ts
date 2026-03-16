@@ -507,7 +507,7 @@ export async function executeBatchProposal(args: {
           ? `${summaryHeader}\n\n${parts.join("\n\n")}`
           : summaryHeader;
 
-        await slackClient.chat.postMessage({
+        const resultsMessageResp = await slackClient.chat.postMessage({
           channel: approval.requestedInChannel,
           thread_ts: approval.requestedInThread,
           text: fullMessage,
@@ -529,7 +529,7 @@ export async function executeBatchProposal(args: {
           const syntheticEvent = {
             type: "message" as const,
             channel: approval.requestedInChannel,
-            ts: `synthetic-continuation-${approvalId}-${Date.now()}`,
+            ts: resultsMessageResp.ts ?? `${Date.now() / 1000}.000000`,
             thread_ts: approval.requestedInThread,
             text: `[Batch "${approval.title}" completed — results are in the thread above. Continue processing.]`,
             user: approval.requestedBy,
