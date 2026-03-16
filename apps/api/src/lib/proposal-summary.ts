@@ -42,10 +42,10 @@ function getServiceName(credentialName?: string): string {
 const summarySchema = z.object({
   title: z
     .string()
-    .describe("Short action-oriented title (max 80 chars). Include the key entity name/identifier."),
+    .describe("Short action-oriented title (max 120 chars). Include the key entity name/identifier and service name."),
   description: z
     .string()
-    .describe("Detailed summary of ALL inputs. Use Slack mrkdwn formatting: *bold* for field names, bullet points with •. List every meaningful field being set with its actual value."),
+    .describe("Bullet-point summary using Slack mrkdwn: *bold* for labels, • for bullets. List every meaningful field with its actual value. Do NOT include example/placeholder data."),
 });
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -77,45 +77,83 @@ export async function generateProposalSummary(input: ProposalSummaryInput): Prom
       ? `⚠️ This is a batch operation affecting ${itemCount} items — emphasize the scope.`
       : "";
 
-  const prompt = `You summarize API requests for a Slack approval card. The reviewer is a busy technical founder who needs to approve or reject in seconds.
+  const system = `You summarize API requests for a Slack approval card. The reviewer is a busy technical founder who needs to approve or reject in seconds.
 
-Your job: make it instantly clear *what* will happen, *to what*, and *with what data*. The reviewer should never need to click "Review items" or inspect raw JSON.
+Your job: make it instantly clear *what* will happen, *to what*, and *with what data*. The reviewer should never need to inspect raw JSON.
 
 Rules:
-- Translate API/technical field names to plain English (e.g. "custom.cf_xyz" → describe the value, "contacts[0].emails" → "Contact email")
+- Only use data from the actual request. NEVER invent values or reuse data from the formatting examples.
+- Infer the action from HTTP method + URL path (e.g. POST to /leads = create a lead, PATCH to /users/123 = update user 123, DELETE to /contacts/456 = delete contact 456).
+- Extract entity names/IDs from the URL path when relevant (e.g. /lead/lead_abc → lead "lead_abc").
+- Translate technical/internal field names to plain English (e.g. "custom.cf_xyz" → describe the value, "contacts[0].emails" → "Contact email", "useLegacySql" → omit if not meaningful to a reviewer).
 - Use Slack mrkdwn: *bold* for field labels, • for bullet points. NOT Markdown (**bold** is wrong).
-- For creates: name the entity being created + list every field being set with actual values
-- For updates/patches: say what's changing with actual values
-- For deletes: say exactly what's being removed
-- Never repeat the title in the description
-- Be specific with real values from the body — no generic "various fields will be set"
-${riskNote}
+- For creates (POST): name the entity + list every field being set with actual values.
+- For updates (PUT/PATCH): say what's changing with actual values.
+- For deletes (DELETE): say exactly what's being removed, include its identifier.
+- For reads (GET): describe what's being fetched and any filters/parameters.
+- For queries (SQL, BigQuery, search): summarize what's being queried/searched and why.
+- For batch operations: state the count and describe what's being done to each item.
+- Format numbers with commas (50000 → 50,000). Format dates to human-readable.
+- Skip boilerplate/internal fields that add no reviewer value (API versions, legacy flags, pagination tokens).
+- Never repeat the title in the description.
+- Be specific with real values — never write generic filler like "various fields will be set".
 
-Service: ${serviceName}
-Method: ${methodUpper}
-URL: ${url}
-${reason ? `Reason: ${reason}` : ""}
-${bodyPreview ? `Body:\n\`\`\`\n${bodyPreview}\n\`\`\`` : "No body"}
-${itemCount > 1 ? `Batch size: ${itemCount} items` : ""}
+<examples>
+These demonstrate the desired FORMAT only. Never use any data from these in your output.
 
-Example input:
-POST https://api.close.com/api/v1/lead/
-Body: {"name":"Acme Corp","description":"Enterprise prospect","contacts":[{"name":"Jane Doe","emails":[{"email":"jane@acme.com"}]}],"custom.cf_industry":"SaaS","custom.cf_deal_size":"50000"}
-
-Example output:
-title: Create lead "Acme Corp" in Close CRM
-description: • *Lead name:* Acme Corp
-• *Description:* Enterprise prospect
+Input: POST to Close CRM (FR) — /api/v1/lead/
+Body: {"name":"Acme Corp","contacts":[{"name":"Jane Doe","emails":[{"email":"jane@acme.com"}]}],"custom.cf_industry":"SaaS"}
+→ title: Create lead "Acme Corp" in Close CRM (FR)
+→ description:
+• *Lead name:* Acme Corp
 • *Contact:* Jane Doe (jane@acme.com)
 • *Industry:* SaaS
-• *Deal size:* 50,000
 
-Now summarize the request above.`;
+Input: PATCH to unknown API — /api/v1/user/usr_8fK2x
+Body: {"role":"admin","department":"Engineering"}
+→ title: Update user usr_8fK2x role and department
+→ description:
+• *Role:* admin
+• *Department:* Engineering
+
+Input: DELETE to Close CRM (US) — /api/v1/contact/cont_abc123
+→ title: Delete contact cont_abc123 in Close CRM (US)
+→ description:
+• *Contact ID:* cont_abc123
+
+Input: POST to BigQuery — /bigquery/v2/projects/my-project/queries
+Reason: Checking lead counts by status
+Body: {"query":"SELECT status, COUNT(*) FROM dataset.leads GROUP BY status"}
+→ title: BigQuery: lead counts by status
+→ description:
+• *Query:* Count leads grouped by status from dataset.leads
+• *Reason:* Checking lead counts by status
+
+Input: POST to Exa Search — /search
+Body: {"query":"realadvisor competitors switzerland","numResults":10,"type":"auto"}
+→ title: Exa search: "realadvisor competitors switzerland"
+→ description:
+• *Query:* realadvisor competitors switzerland
+• *Results requested:* 10
+</examples>`;
+
+  const parts = [
+    `Service: ${serviceName}`,
+    `Method: ${methodUpper}`,
+    `URL: ${url}`,
+  ];
+  if (reason) parts.push(`Reason: ${reason}`);
+  if (bodyPreview) parts.push(`Body:\n\`\`\`\n${bodyPreview}\n\`\`\``);
+  if (itemCount > 1) parts.push(`Batch size: ${itemCount} items`);
+  if (riskNote) parts.push(riskNote);
+
+  const prompt = `Summarize this API request:\n\n${parts.join("\n")}`;
 
   try {
     const { object } = await generateObject({
       model: fastModel,
       schema: summarySchema,
+      system,
       prompt,
       temperature: 0,
     });
