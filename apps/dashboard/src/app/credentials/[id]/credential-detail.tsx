@@ -23,7 +23,7 @@ import {
 import { Combobox } from "@/components/ui/combobox";
 import { AuthSecretFields } from "../credential-secret-fields";
 import type { AuthScheme, SecretPayloadInput } from "../credential-secret";
-import { ArrowLeft, Trash2 } from "lucide-react";
+import { ArrowLeft, Trash2, Eye } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import type { Credential } from "@schema";
 
@@ -60,6 +60,7 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
   const [isUpdatingValue, setIsUpdatingValue] = useState(false);
   const [isGranting, setIsGranting] = useState(false);
+  const [auditDetailContext, setAuditDetailContext] = useState<string | null>(null);
   const [isUpdatingAccess, setIsUpdatingAccess] = useState<string | null>(null);
   const [permissionEdits, setPermissionEdits] = useState<Record<string, "read" | "write">>(
     Object.fromEntries(data.access.map((item) => [item.userId, item.permission])),
@@ -370,9 +371,28 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
                       (() => {
                         try {
                           const parsed = JSON.parse(entry.context);
-                          return <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(parsed, null, 2)}</pre>;
+                          const summary = [parsed.source, parsed.request?.operation].filter(Boolean).join(" / ") || "details";
+                          return (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              onClick={() => setAuditDetailContext(entry.context)}
+                            >
+                              <Eye className="h-3 w-3" />
+                              {summary}
+                            </button>
+                          );
                         } catch {
-                          return entry.context;
+                          return (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                              onClick={() => setAuditDetailContext(entry.context)}
+                            >
+                              <Eye className="h-3 w-3" />
+                              view
+                            </button>
+                          );
                         }
                       })()
                     ) : (
@@ -407,6 +427,21 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
             </Button>
           </div>
         </div>
+      </Dialog>
+
+      <Dialog open={auditDetailContext !== null} onOpenChange={(open) => { if (!open) setAuditDetailContext(null); }}>
+        <DialogHeader>
+          <DialogTitle>Audit Log Detail</DialogTitle>
+        </DialogHeader>
+        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
+          {(() => {
+            try {
+              return JSON.stringify(JSON.parse(auditDetailContext ?? ""), null, 2);
+            } catch {
+              return auditDetailContext ?? "";
+            }
+          })()}
+        </pre>
       </Dialog>
 
     </>
