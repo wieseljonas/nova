@@ -603,12 +603,10 @@ export async function addCredentialReader(
 
   const readerIds = (cred.readerUserIds as string[]) ?? [];
   if (!readerIds.includes(granteeId)) {
-    readerIds.push(granteeId);
-    
     await db
       .update(credentials)
       .set({ 
-        readerUserIds: readerIds as any,
+        readerUserIds: sql`COALESCE(${credentials.readerUserIds}, '[]'::jsonb) || ${JSON.stringify([granteeId])}::jsonb`,
         updatedAt: new Date()
       })
       .where(eq(credentials.id, credentialId));
@@ -638,12 +636,10 @@ export async function addCredentialWriter(
 
   const writerIds = (cred.writerUserIds as string[]) ?? [];
   if (!writerIds.includes(granteeId)) {
-    writerIds.push(granteeId);
-    
     await db
       .update(credentials)
       .set({ 
-        writerUserIds: writerIds as any,
+        writerUserIds: sql`COALESCE(${credentials.writerUserIds}, '[]'::jsonb) || ${JSON.stringify([granteeId])}::jsonb`,
         updatedAt: new Date()
       })
       .where(eq(credentials.id, credentialId));

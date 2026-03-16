@@ -51,14 +51,28 @@ Returns a proposal_id that tracks the batch through approval and execution.`,
       };
     }
 
+    // Look up credential to get approver IDs
+    let approverIds: string[] | undefined;
+    let credentialOwner: string | undefined;
+    if (input.credential_name) {
+      const { getCredentialForApproval, getApprovers } = await import("../lib/approval.js");
+      const credential = await getCredentialForApproval(input.credential_name, ctx.triggeredBy);
+      if (credential) {
+        approverIds = getApprovers(credential);
+        credentialOwner = credential.ownerUserId;
+      }
+    }
+
     const result = await createProposal({
       title: input.title,
       description: input.description,
       credentialName: input.credential_name,
+      credentialOwner,
       items: input.items as any,
       requestedBy: ctx.triggeredBy,
       requestedInChannel: ctx.channelId,
       requestedInThread: ctx.threadTs,
+      approverIds,
     });
 
     if (result.ok) {
