@@ -18,7 +18,6 @@ import {
   openUpdateCredentialModal,
   openShareCredentialModal,
   openCredentialAccessModal,
-  openCredentialPermissionsModal,
 } from "./slack/home.js";
 import {
   storeApiCredential,
