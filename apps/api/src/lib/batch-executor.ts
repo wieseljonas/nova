@@ -335,6 +335,13 @@ export async function executeBatchProposal(args: {
 
     let completed = 0;
     let failed = 0;
+    const itemResults: Array<{
+      sequenceNum: number;
+      method: string;
+      ok: boolean;
+      status?: number;
+      error?: string;
+    }> = [];
 
     for (const item of itemRows) {
       // Check circuit breaker
@@ -382,6 +389,14 @@ export async function executeBatchProposal(args: {
           executedAt: new Date(),
         })
         .where(eq(approvalItems.id, item.id));
+
+      itemResults.push({
+        sequenceNum: item.sequenceNum,
+        method: item.method,
+        ok: executionResult.ok,
+        status: executionResult.status,
+        error: executionResult.error,
+      });
 
       if (executionResult.ok) {
         completed++;
@@ -434,42 +449,34 @@ export async function executeBatchProposal(args: {
     });
 
     // ── Post results back to the original conversation thread ──────────────
-    // This enables continuation: the LLM sees results in thread context on next wake.
-    if (approval.requestedInChannel && approval.requestedInThread) {
+    if (slackClient && approval.requestedInChannel && approval.requestedInThread) {
       try {
-        // Load completed item results
-        const completedItemRows = await db
-          .select()
-          .from(approvalItems)
-          .where(eq(approvalItems.approvalId, approvalId))
-          .orderBy(approvalItems.sequenceNum);
+        const MAX_MESSAGE_LENGTH = 3500;
+        const summaryHeader = failed > 0
+          ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemResults.length} succeeded)`
+          : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemResults.length} completed successfully`;
 
-        // Build a concise summary of results
-        const resultParts: string[] = [];
-        for (const item of completedItemRows) {
-          if (item.status === "succeeded" && item.responseBody) {
-            // Truncate large responses to keep the thread reply readable
-            const bodyStr = typeof item.responseBody === "string"
-              ? item.responseBody
-              : JSON.stringify(item.responseBody);
-            const truncated = bodyStr.length > 4000
-              ? bodyStr.slice(0, 4000) + "\n... (truncated)"
-              : bodyStr;
-            resultParts.push(`*Item ${item.sequenceNum}* (${item.method} ${item.responseStatus}):${"\n"}\`\`\`${truncated}\`\`\``);
-          } else if (item.status === "failed") {
-            resultParts.push(`*Item ${item.sequenceNum}* :x: ${item.error ?? "Unknown error"}`);
+        const resultLines: string[] = [];
+        let totalLength = summaryHeader.length;
+
+        for (const r of itemResults) {
+          const line = r.ok
+            ? `• Item ${r.sequenceNum}: ${r.method} → ${r.status}`
+            : `• Item ${r.sequenceNum}: :x: ${r.error ?? `HTTP ${r.status}`}`;
+
+          if (totalLength + line.length + 1 > MAX_MESSAGE_LENGTH) {
+            const remaining = itemResults.length - resultLines.length;
+            resultLines.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""}_`);
+            break;
           }
+          resultLines.push(line);
+          totalLength += line.length + 1;
         }
 
-        const summaryHeader = failed > 0
-          ? `:warning: ${approval.title ?? "Batch"} — Completed with ${failed} failure${failed > 1 ? "s" : ""}`
-          : `:white_check_mark: ${approval.title ?? "Batch"} — Completed successfully`;
-
-        const fullMessage = resultParts.length > 0
-          ? `${summaryHeader}\n\n${resultParts.join("\n\n")}`
+        const fullMessage = resultLines.length > 0
+          ? `${summaryHeader}\n\n${resultLines.join("\n")}`
           : summaryHeader;
 
-        // Post as thread reply to the original conversation
         await slackClient.chat.postMessage({
           channel: approval.requestedInChannel,
           thread_ts: approval.requestedInThread,
@@ -482,7 +489,6 @@ export async function executeBatchProposal(args: {
           thread: approval.requestedInThread,
         });
       } catch (replyErr) {
-        // Non-critical: log but don't fail the batch
         logger.warn("Failed to post results to original thread", {
           approvalId,
           error: replyErr instanceof Error ? replyErr.message : String(replyErr),
