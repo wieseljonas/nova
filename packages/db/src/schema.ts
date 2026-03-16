@@ -701,6 +701,7 @@ export const approvals = pgTable(
     failedItems: integer("failed_items").notNull().default(0),
     requestedBy: text("requested_by").notNull().default("nova"),
     requestedInChannel: text("requested_in_channel"),
+    requestedInThread: text("requested_in_thread"),
     approvedBy: text("approved_by").array(),
     jobId: uuid("job_id").references(() => jobs.id),
     slackMessageTs: text("slack_message_ts"),

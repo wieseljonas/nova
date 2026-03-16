@@ -741,6 +741,11 @@ app.post("/api/slack/interactions", async (c) => {
       if (action.action_id?.startsWith("approval_approve_")) {
         const approvalId = action.action_id.replace("approval_approve_", "");
 
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(approvalId)) {
+          logger.warn("Invalid approvalId in action_id", { actionId: action.action_id });
+          return c.body("ok");
+        }
+
         const approvePromise = (async () => {
           try {
             const channelId = payload.channel?.id;
@@ -753,49 +758,25 @@ app.post("/api/slack/interactions", async (c) => {
             });
             if (!approval) return;
 
-            const currentApprovedBy = approval.approvedBy ?? [];
-
-            // Check if user already approved (prevent duplicate approvals)
-            if (currentApprovedBy.includes(userId)) {
-              logger.info("User already approved this approval", { approvalId, userId });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: "You've already approved this.",
-                });
-              }
-              return;
-            }
-
-            // Atomically append userId to approvedBy array
+            // Atomic CAS: set status to "approved" only if still "pending".
+            // Prevents double-execution when two users click Approve simultaneously.
             const updatedRows = await db
               .update(approvals)
               .set({
+                status: "approved",
                 approvedBy: sql`array_append(${approvals.approvedBy}, ${userId})`,
                 updatedAt: new Date(),
               })
-              .where(eq(approvals.id, approvalId))
+              .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
               .returning();
 
             const updatedApproval = updatedRows[0];
             if (!updatedApproval) {
-              logger.error("Failed to update approval", { approvalId });
+              await postEphemeralIfChannel(slackClient, channelId, userId, "This approval has already been processed.");
               return;
             }
 
             const newApprovedBy = updatedApproval.approvedBy ?? [];
-            const approvalCount = newApprovedBy.length;
-
-            // Single approval mode: first approval triggers execution.
-            await db
-              .update(approvals)
-              .set({
-                status: "approved",
-                updatedAt: new Date(),
-              })
-              .where(eq(approvals.id, approvalId));
 
             const result = await executeBatchProposal({ approvalId, slackClient });
             if (!result.ok) {
@@ -808,7 +789,7 @@ app.post("/api/slack/interactions", async (c) => {
             logger.info("Batch approval approved and execution started", {
               approvalId,
               approvedBy: newApprovedBy,
-              approvalCount,
+              approvalCount: newApprovedBy.length,
             });
           } catch (err) {
             recordError("interactions.approval_approve", err, { userId, approvalId });
@@ -820,6 +801,11 @@ app.post("/api/slack/interactions", async (c) => {
 
       if (action.action_id?.startsWith("approval_reject_")) {
         const approvalId = action.action_id.replace("approval_reject_", "");
+
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(approvalId)) {
+          logger.warn("Invalid approvalId in action_id", { actionId: action.action_id });
+          return c.body("ok");
+        }
 
         const rejectPromise = (async () => {
           try {
@@ -833,14 +819,20 @@ app.post("/api/slack/interactions", async (c) => {
             });
             if (!approval) return;
 
-            // Update approval status
-            await db
+            // Atomic CAS: only reject if still pending
+            const rejectedRows = await db
               .update(approvals)
               .set({
                 status: "rejected",
                 updatedAt: new Date(),
               })
-              .where(eq(approvals.id, approvalId));
+              .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
+              .returning();
+
+            if (rejectedRows.length === 0) {
+              await postEphemeralIfChannel(slackClient, channelId, userId, "This approval has already been processed.");
+              return;
+            }
 
             // Update Slack card
             if (approval?.slackChannel && approval.slackMessageTs) {
@@ -888,6 +880,11 @@ app.post("/api/slack/interactions", async (c) => {
 
       if (action.action_id?.startsWith("approval_review_") && payload.trigger_id) {
         const approvalId = action.action_id.replace("approval_review_", "");
+
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(approvalId)) {
+          logger.warn("Invalid approvalId in action_id", { actionId: action.action_id });
+          return c.body("ok");
+        }
 
         const reviewPromise = (async () => {
           try {

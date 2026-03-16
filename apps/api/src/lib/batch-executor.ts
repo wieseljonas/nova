@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { approvals, approvalItems, type Approval } from "@aura/db/schema";
 import { injectCredentialAuth, type ResolvedCredentialAuth } from "./credential-auth.js";
+import { isPrivateUrl } from "./ssrf.js";
 import { logger } from "./logger.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -100,6 +101,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         totalItems: items.length,
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
+        requestedInThread: requestedInThread ?? null,
       })
       .returning({ id: approvals.id });
 
@@ -290,6 +292,20 @@ export async function executeBatchProposal(args: {
       return { ok: true };
     }
 
+    if (itemRows.length !== approval.totalItems) {
+      logger.error("executeBatchProposal: item count mismatch — possible tampering", {
+        approvalId,
+        expected: approval.totalItems,
+        actual: itemRows.length,
+      });
+      await db
+        .update(approvals)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(approvals.id, approvalId));
+      await updateApprovalCard(slackClient, approval, "failed", "Item count mismatch — execution aborted");
+      return { ok: false, error: `Item count mismatch: expected ${approval.totalItems}, found ${itemRows.length}` };
+    }
+
     // Get credential for requests
     const { getApiCredentialWithType } = await import("./api-credentials.js");
     let credential: ResolvedCredentialAuth | null = null;
@@ -334,6 +350,13 @@ export async function executeBatchProposal(args: {
 
     let completed = 0;
     let failed = 0;
+    const itemResults: Array<{
+      sequenceNum: number;
+      method: string;
+      ok: boolean;
+      status?: number;
+      error?: string;
+    }> = [];
 
     for (const item of itemRows) {
       // Check circuit breaker
@@ -381,6 +404,14 @@ export async function executeBatchProposal(args: {
           executedAt: new Date(),
         })
         .where(eq(approvalItems.id, item.id));
+
+      itemResults.push({
+        sequenceNum: item.sequenceNum,
+        method: item.method,
+        ok: executionResult.ok,
+        status: executionResult.status,
+        error: executionResult.error,
+      });
 
       if (executionResult.ok) {
         completed++;
@@ -432,6 +463,54 @@ export async function executeBatchProposal(args: {
       failed,
     });
 
+    // ── Post results back to the original conversation thread ──────────────
+    if (slackClient && approval.requestedInChannel && approval.requestedInThread) {
+      try {
+        const MAX_MESSAGE_LENGTH = 3500;
+        const summaryHeader = failed > 0
+          ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)`
+          : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemRows.length} completed successfully`;
+
+        const resultLines: string[] = [];
+        let totalLength = summaryHeader.length;
+
+        for (const r of itemResults) {
+          const line = r.ok
+            ? `• Item ${r.sequenceNum}: ${r.method} → ${r.status}`
+            : `• Item ${r.sequenceNum}: :x: ${r.error ?? `HTTP ${r.status}`}`;
+
+          if (totalLength + line.length + 1 > MAX_MESSAGE_LENGTH) {
+            const remaining = itemResults.length - resultLines.length;
+            resultLines.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""}_`);
+            break;
+          }
+          resultLines.push(line);
+          totalLength += line.length + 1;
+        }
+
+        const fullMessage = resultLines.length > 0
+          ? `${summaryHeader}\n\n${resultLines.join("\n")}`
+          : summaryHeader;
+
+        await slackClient.chat.postMessage({
+          channel: approval.requestedInChannel,
+          thread_ts: approval.requestedInThread,
+          text: fullMessage,
+        });
+
+        logger.info("Posted execution results to original thread", {
+          approvalId,
+          channel: approval.requestedInChannel,
+          thread: approval.requestedInThread,
+        });
+      } catch (replyErr) {
+        logger.warn("Failed to post results to original thread", {
+          approvalId,
+          error: replyErr instanceof Error ? replyErr.message : String(replyErr),
+        });
+      }
+    }
+
     return { ok: true };
   } catch (err) {
     logger.error("executeBatchProposal failed", {
@@ -462,6 +541,10 @@ async function executeHttpRequest(args: {
   const { method, url, body, headers, credential } = args;
 
   try {
+    if (await isPrivateUrl(url)) {
+      return { ok: false, error: `Blocked: URL resolves to a private/internal address` };
+    }
+
     const injected = injectCredentialAuth(url, headers, credential);
     const requestHeaders = injected.headers;
     const requestUrl = injected.url;

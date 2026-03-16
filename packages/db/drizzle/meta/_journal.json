@@ -393,6 +393,13 @@
       "when": 1774348800000,
       "tag": "0055_remove_approval_mode_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1774348800001,
+      "tag": "0056_approval_requested_in_thread",
+      "breakpoints": true
     }
   ]
 }
