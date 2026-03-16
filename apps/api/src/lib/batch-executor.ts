@@ -97,7 +97,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         title,
         description: description ?? null,
         credentialKey: credentialKey ?? null,
-        credentialOwner: credentialOwner ?? null,
+        credentialOwner: credentialOwner ?? requestedBy,
         urlPattern: url.split("?")[0],
         httpMethod: method,
         totalItems: items.length,
