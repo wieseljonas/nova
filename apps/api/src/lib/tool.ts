@@ -147,14 +147,10 @@ export function defineTool<TInput, TOutput>(config: {
             reason: httpInput.reason as string | undefined,
           });
           
-          const approvers = getApprovers(credential);
-          const approvalChannel = getApprovalChannel(credential);
-          
           const result = await createProposal({
             title: summary.title,
             description: summary.description,
-            credentialName,
-            credentialOwner,
+            credentialKey: credentialName,
             items: [{
               method,
               url,
@@ -162,9 +158,8 @@ export function defineTool<TInput, TOutput>(config: {
               headers: httpInput.headers as Record<string, string> | undefined,
             }],
             requestedBy: ctx.triggeredBy,
-            requestedInChannel: approvalChannel ?? ctx.channelId,
+            requestedInChannel: ctx.channelId,
             requestedInThread: ctx.threadTs,
-            approverIds: approvers,
           });
 
           if (!result.ok) {

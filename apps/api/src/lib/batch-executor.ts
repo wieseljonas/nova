@@ -16,13 +16,11 @@ export interface ProposalItem {
 export interface CreateProposalArgs {
   title: string;
   description?: string;
-  credentialName?: string;
-  credentialOwner?: string;
+  credentialKey?: string;
   items: ProposalItem[];
   requestedBy: string;
   requestedInChannel?: string;
   requestedInThread?: string;
-  approverIds?: string[];
   slackClient?: WebClient;
 }
 
@@ -49,7 +47,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   approvalId?: string;
   error?: string;
 }> {
-  const { title, description, credentialName, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, approverIds: passedApproverIds, slackClient: injectedSlackClient } = args;
+  const { title, description, credentialKey, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
 
   if (items.length === 0) {
     return { ok: false, error: "No items to approve" };
@@ -63,10 +61,28 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     const method = firstItem.method.toUpperCase();
     const url = firstItem.url;
 
-    // Use passed approverIds (from credential) or default to empty
-    const approverIds = passedApproverIds ?? [];
-    const approvalMode = "any_one"; // Hardcoded: any approver can approve
-    const requiredApprovals = 1; // any_one mode always requires 1 approval
+    // Look up credential to get approvers for the Slack card
+    let approverIds: string[] = [];
+    let approvalChannel: string | null = null;
+    if (credentialKey && requestedBy) {
+      const { credentials } = await import("@aura/db/schema");
+      const { eq } = await import("drizzle-orm");
+      const credRows = await db
+        .select()
+        .from(credentials)
+        .where(eq(credentials.key, credentialKey))
+        .limit(1);
+      
+      const credential = credRows[0];
+      if (credential) {
+        const writerIds = (credential.writerUserIds as string[]) ?? [];
+        approverIds = [credential.ownerUserId, ...writerIds];
+        approvalChannel = credential.approvalSlackChannelId ?? null;
+      }
+    }
+
+    const approvalMode = "any_one";
+    const requiredApprovals = 1;
 
     // Create approval record
     const [approval] = await db
@@ -74,15 +90,13 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
       .values({
         title,
         description: description ?? null,
-        credentialName: credentialName ?? null,
-        credentialOwner: credentialOwner ?? requestedBy,
-        urlPattern: url.split("?")[0], // Strip query params for pattern
+        credentialKey: credentialKey ?? null,
+        urlPattern: url.split("?")[0],
         httpMethod: method,
         totalItems: items.length,
         requestedBy,
-        requestedInChannel: requestedInChannel ?? null,
+        requestedInChannel: approvalChannel ?? requestedInChannel ?? null,
         approvalMode,
-        approverIds,
         requiredApprovals,
       })
       .returning({ id: approvals.id });
@@ -276,27 +290,40 @@ export async function executeBatchProposal(args: {
 
     // Get credential for requests
     const { getApiCredentialWithType } = await import("./api-credentials.js");
+    const { credentials } = await import("@aura/db/schema");
     let credential: any = null;
-    if (approval.credentialName) {
+    if (approval.credentialKey) {
       try {
-        const owner = approval.credentialOwner ?? approval.requestedBy;
+        // Look up credential by key to get owner
+        const credRows = await db
+          .select()
+          .from(credentials)
+          .where(eq(credentials.key, approval.credentialKey))
+          .limit(1);
+        
+        const cred = credRows[0];
+        if (!cred) {
+          throw new Error(`Credential with key '${approval.credentialKey}' not found`);
+        }
+        
+        // Get credential value with type info
         credential = await getApiCredentialWithType(
-          approval.credentialName,
-          owner,
-          owner,
+          approval.credentialKey,
+          cred.ownerUserId,
+          cred.ownerUserId,
           "write"
         );
       } catch (err) {
         logger.error("executeBatchProposal: failed to load credential", {
           approvalId,
-          credentialName: approval.credentialName,
+          credentialKey: approval.credentialKey,
           error: err,
         });
         await db
           .update(approvals)
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(approvals.id, approvalId));
-        const errMsg = `Failed to load credential '${approval.credentialName}' (owner: ${approval.credentialOwner ?? approval.requestedBy}). ${err instanceof Error ? err.message : ""}`.trim();
+        const errMsg = `Failed to load credential '${approval.credentialKey}'. ${err instanceof Error ? err.message : ""}`.trim();
         await updateApprovalCard(slackClient, approval, "failed", errMsg);
         return { ok: false, error: errMsg };
       }
