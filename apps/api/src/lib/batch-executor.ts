@@ -453,8 +453,8 @@ export async function executeBatchProposal(args: {
       try {
         const MAX_MESSAGE_LENGTH = 3500;
         const summaryHeader = failed > 0
-          ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemResults.length} succeeded)`
-          : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemResults.length} completed successfully`;
+          ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)`
+          : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemRows.length} completed successfully`;
 
         const resultLines: string[] = [];
         let totalLength = summaryHeader.length;
