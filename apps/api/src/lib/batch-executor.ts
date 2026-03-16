@@ -18,6 +18,7 @@ export interface CreateProposalArgs {
   title: string;
   description?: string;
   credentialName?: string;
+  credentialOwner?: string;
   items: ProposalItem[];
   requestedBy: string;
   requestedInChannel?: string;
@@ -48,7 +49,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   approvalId?: string;
   error?: string;
 }> {
-  const { title, description, credentialName, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
+  const { title, description, credentialName, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
 
   if (items.length === 0) {
     return { ok: false, error: "No items to approve" };
@@ -81,6 +82,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         title,
         description: description ?? null,
         credentialName: credentialName ?? null,
+        credentialOwner: credentialOwner ?? requestedBy,
         urlPattern: url.split("?")[0], // Strip query params for pattern
         httpMethod: method,
         totalItems: items.length,
@@ -285,10 +287,11 @@ export async function executeBatchProposal(args: {
     let credential: any = null;
     if (approval.credentialName) {
       try {
+        const owner = approval.credentialOwner ?? approval.requestedBy;
         credential = await getApiCredentialWithType(
           approval.credentialName,
-          approval.requestedBy,
-          approval.requestedBy,
+          owner,
+          owner,
           "write"
         );
       } catch (err) {
@@ -301,8 +304,9 @@ export async function executeBatchProposal(args: {
           .update(approvals)
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(approvals.id, approvalId));
-        await updateApprovalCard(slackClient, approval, "failed", "Failed to load API credential");
-        return { ok: false, error: "Failed to load credential" };
+        const errMsg = `Failed to load credential '${approval.credentialName}' (owner: ${approval.credentialOwner ?? approval.requestedBy}). ${err instanceof Error ? err.message : ""}`.trim();
+        await updateApprovalCard(slackClient, approval, "failed", errMsg);
+        return { ok: false, error: errMsg };
       }
     }
 
