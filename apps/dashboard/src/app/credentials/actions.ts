@@ -120,6 +120,20 @@ function parseDate(value?: string): Date | null {
   return parsed;
 }
 
+async function queryKnownUsers() {
+  return await db
+    .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
+    .from(userProfiles)
+    .orderBy(desc(userProfiles.interactionCount))
+    .limit(200);
+}
+
+function formatUserLabel(slackUserId: string, displayName: string | null) {
+  return displayName && displayName !== slackUserId
+    ? `${displayName} (${slackUserId})`
+    : slackUserId;
+}
+
 export async function getCredentials(
   search?: string,
   page = 1,
@@ -269,11 +283,7 @@ export async function getCredential(id: string) {
     }
   }
 
-  const knownUsers = await db
-    .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
-    .from(userProfiles)
-    .orderBy(desc(userProfiles.interactionCount))
-    .limit(200);
+  const knownUsers = await queryKnownUsers();
 
   return {
     ...cred,
@@ -283,10 +293,7 @@ export async function getCredential(id: string) {
     userNames,
     knownUsers: knownUsers.map((user) => ({
       userId: user.slackUserId,
-      label:
-        user.displayName && user.displayName !== user.slackUserId
-          ? `${user.displayName} (${user.slackUserId})`
-          : user.slackUserId,
+      label: formatUserLabel(user.slackUserId, user.displayName),
     })),
     auditLog: auditLog.map((entry) => ({
       ...entry,
@@ -605,18 +612,10 @@ export async function updateCredentialMetadata(data: {
 }
 
 export async function getKnownUsers() {
-  const users = await db
-    .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
-    .from(userProfiles)
-    .orderBy(desc(userProfiles.interactionCount))
-    .limit(200);
-
+  const users = await queryKnownUsers();
   return users.map((user) => ({
     value: user.slackUserId,
-    label:
-      user.displayName && user.displayName !== user.slackUserId
-        ? `${user.displayName} (${user.slackUserId})`
-        : user.slackUserId,
+    label: formatUserLabel(user.slackUserId, user.displayName),
   }));
 }
 
