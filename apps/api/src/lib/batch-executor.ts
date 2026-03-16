@@ -5,6 +5,7 @@ import { approvals, approvalItems, type Approval } from "@aura/db/schema";
 import { injectCredentialAuth, type ResolvedCredentialAuth } from "./credential-auth.js";
 import { isPrivateUrl } from "./ssrf.js";
 import { logger } from "./logger.js";
+import { executionContext } from "./tool.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -517,6 +518,41 @@ export async function executeBatchProposal(args: {
           channel: approval.requestedInChannel,
           thread: approval.requestedInThread,
         });
+
+        // Re-invoke the pipeline so the LLM can continue processing with results.
+        // Constructs a synthetic event that looks like a user message in the thread —
+        // the pipeline loads thread context (which now includes results) and the LLM continues.
+        try {
+          const { runPipeline } = await import("../pipeline/index.js");
+          const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
+          const channelType = approval.requestedInChannel.startsWith("D") ? "im" : "channel";
+          const syntheticEvent = {
+            type: "message" as const,
+            channel: approval.requestedInChannel,
+            ts: `synthetic-continuation-${approvalId}-${Date.now()}`,
+            thread_ts: approval.requestedInThread,
+            text: `[Batch "${approval.title}" completed — results are in the thread above. Continue processing.]`,
+            user: approval.requestedBy,
+            channel_type: channelType,
+          };
+
+          await executionContext.run(
+            {
+              triggeredBy: approval.requestedBy,
+              triggerType: "user_message",
+              channelId: approval.requestedInChannel,
+              threadTs: approval.requestedInThread,
+            },
+            () => runPipeline({ event: syntheticEvent, client: slackClient, botUserId }),
+          );
+
+          logger.info("Auto-continuation pipeline completed", { approvalId });
+        } catch (continuationErr) {
+          logger.warn("Auto-continuation pipeline failed", {
+            approvalId,
+            error: continuationErr instanceof Error ? continuationErr.message : String(continuationErr),
+          });
+        }
       } catch (replyErr) {
         logger.warn("Failed to post results to original thread", {
           approvalId,
