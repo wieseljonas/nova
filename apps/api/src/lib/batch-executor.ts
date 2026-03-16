@@ -355,6 +355,7 @@ export async function executeBatchProposal(args: {
       method: string;
       ok: boolean;
       status?: number;
+      body?: unknown;
       error?: string;
     }> = [];
 
@@ -410,6 +411,7 @@ export async function executeBatchProposal(args: {
         method: item.method,
         ok: executionResult.ok,
         status: executionResult.status,
+        body: executionResult.body,
         error: executionResult.error,
       });
 
@@ -464,32 +466,44 @@ export async function executeBatchProposal(args: {
     });
 
     // ── Post results back to the original conversation thread ──────────────
+    // Include response bodies so the LLM can continue processing with actual data.
     if (slackClient && approval.requestedInChannel && approval.requestedInThread) {
       try {
-        const MAX_MESSAGE_LENGTH = 3500;
+        const MAX_TOTAL = 38_000; // Slack limit is ~40K; leave headroom
+        const MAX_PER_ITEM = 4_000;
+
         const summaryHeader = failed > 0
           ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)`
           : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemRows.length} completed successfully`;
 
-        const resultLines: string[] = [];
+        const parts: string[] = [];
         let totalLength = summaryHeader.length;
 
         for (const r of itemResults) {
-          const line = r.ok
-            ? `• Item ${r.sequenceNum}: ${r.method} → ${r.status}`
-            : `• Item ${r.sequenceNum}: :x: ${r.error ?? `HTTP ${r.status}`}`;
+          let part: string;
+          if (r.ok && r.body !== undefined) {
+            const bodyStr = typeof r.body === "string" ? r.body : JSON.stringify(r.body, null, 2);
+            const truncatedBody = bodyStr.length > MAX_PER_ITEM
+              ? bodyStr.slice(0, MAX_PER_ITEM) + "\n… (truncated)"
+              : bodyStr;
+            part = `*Item ${r.sequenceNum}* (${r.method} → ${r.status}):\n\`\`\`\n${truncatedBody}\n\`\`\``;
+          } else if (r.ok) {
+            part = `*Item ${r.sequenceNum}*: ${r.method} → ${r.status} (empty response)`;
+          } else {
+            part = `*Item ${r.sequenceNum}*: :x: ${r.error ?? `HTTP ${r.status}`}`;
+          }
 
-          if (totalLength + line.length + 1 > MAX_MESSAGE_LENGTH) {
-            const remaining = itemResults.length - resultLines.length;
-            resultLines.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""}_`);
+          if (totalLength + part.length + 2 > MAX_TOTAL) {
+            const remaining = itemResults.length - parts.length;
+            parts.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""} (results stored in DB)_`);
             break;
           }
-          resultLines.push(line);
-          totalLength += line.length + 1;
+          parts.push(part);
+          totalLength += part.length + 2;
         }
 
-        const fullMessage = resultLines.length > 0
-          ? `${summaryHeader}\n\n${resultLines.join("\n")}`
+        const fullMessage = parts.length > 0
+          ? `${summaryHeader}\n\n${parts.join("\n\n")}`
           : summaryHeader;
 
         await slackClient.chat.postMessage({
