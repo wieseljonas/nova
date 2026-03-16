@@ -23,10 +23,12 @@ import {
 import {
   storeApiCredential,
   deleteApiCredential,
-  grantApiCredentialAccess,
+  addCredentialReader,
+  addCredentialWriter,
+  removeCredentialAccess,
   listApiCredentials,
+  listAccessForCredentials,
   hasPermission,
-  updateCredentialMethods,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
 import { executionContext } from "./lib/tool.js";
@@ -521,14 +523,14 @@ app.post("/api/slack/interactions", async (c) => {
           if (payload.trigger_id) {
             const creds = await listApiCredentials(userId);
             const cred = creds.find((c) => c.id === credId);
-            const credName = cred?.name ?? "credential";
+            const credKey = cred?.key ?? "credential";
             const credAuthScheme = (cred?.authScheme ??
               "bearer") as "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account";
             const updatePromise = openUpdateCredentialModal(
               slackClient,
               payload.trigger_id,
               credId,
-              credName,
+              credKey,
               credAuthScheme,
             ).catch((err) => {
               recordError("interactions.api_credential_update_modal", err, { userId, credId });
@@ -570,27 +572,6 @@ app.post("/api/slack/interactions", async (c) => {
             recordError("interactions.api_credential_access_modal", err, { userId, credId });
           });
           waitUntil(accessPromise);
-        } else if (selectedValue.startsWith("api_credential_permissions_") && payload.trigger_id) {
-          const credId = selectedValue.replace("api_credential_permissions_", "");
-          const permissionsPromise = (async () => {
-            try {
-              const creds = await listApiCredentials(userId);
-              const cred = creds.find((c) => c.id === credId);
-              if (cred) {
-                await openCredentialPermissionsModal(
-                  slackClient,
-                  payload.trigger_id!,
-                  credId,
-                  cred.name,
-                  cred.allowed_methods,
-                );
-              }
-            } catch (err) {
-              recordError("interactions.api_credential_permissions_modal", err, { userId, credId });
-            }
-          })();
-          waitUntil(permissionsPromise);
-        }
       }
 
       // ── Confirmation buttons (Phase 4) ──────────────────────────────
@@ -1164,19 +1145,19 @@ function extractCredentialValue(
             const cred = creds.find((c) => c.id === credentialId);
             if (!cred) return;
 
-            const allowed = await hasPermission(cred.owner_id, cred.id, userId, "write");
+            const allowed = await hasPermission(cred.owner_user_id, cred.id, userId, "write");
             if (!allowed) {
               await slackClient.chat.postEphemeral({
                 channel: userId,
                 user: userId,
-                text: `Permission denied: you don't have write access to credential "${cred.name}".`,
+                text: `Permission denied: you don't have write access to credential "${cred.key}".`,
               });
               return;
             }
 
             const updatedCred = await storeApiCredential(
-              cred.owner_id,
-              cred.name,
+              cred.owner_user_id,
+              cred.key,
               value,
               cred.expires_at ?? undefined,
               authScheme,
@@ -1204,7 +1185,11 @@ function extractCredentialValue(
       if (credentialId && granteeId && permission) {
         const sharePromise = (async () => {
           try {
-            await grantApiCredentialAccess(credentialId, userId, granteeId, permission as "read" | "write" | "admin");
+            if (permission === "read") {
+              await addCredentialReader(credentialId, userId, granteeId);
+            } else if (permission === "write") {
+              await addCredentialWriter(credentialId, userId, granteeId);
+            }
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_share", err, { userId, credentialId });
@@ -1214,23 +1199,6 @@ function extractCredentialValue(
       }
     }
 
-    if (callbackId === "api_credential_permissions_submit" && userId) {
-      const credentialId = payload.view?.private_metadata;
-      const selectedOptions = payload.view?.state?.values?.methods_block?.methods_checkboxes?.selected_options ?? [];
-      const allowedMethods = selectedOptions.map((opt: any) => opt.value);
-
-      if (credentialId) {
-        const permissionsPromise = (async () => {
-          try {
-            await updateCredentialMethods(credentialId, userId, allowedMethods);
-            await publishHomeTab(slackClient, userId);
-          } catch (err) {
-            recordError("interactions.api_credential_permissions_update", err, { userId, credentialId });
-          }
-        })();
-        waitUntil(permissionsPromise);
-      }
-    }
 
     // Slack modals require empty response or response_action to close properly
     return c.json({ response_action: "clear" });
