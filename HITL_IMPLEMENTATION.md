@@ -17,6 +17,54 @@ HITL does not use the legacy policy engine anymore. It is credential-centric and
 5. Approver action (`approval_approve_*`) marks approval approved and executes `executeBatchProposal`.
 6. Batch executor performs requests sequentially and updates approval + Slack status.
 
+## Sequence Diagram
+
+```mermaid
+sequenceDiagram
+  participant U as User in Slack
+  participant L as LLM / ToolLoop
+  participant G as Governance (defineTool)
+  participant DB as Postgres
+  participant S as Slack API
+  participant E as Batch Executor
+  participant API as External API
+
+  U->>L: Request action needing http_request
+  L->>G: Invoke http_request(method,url,credential)
+  G->>DB: Check credential + access (owner/writer/reader)
+
+  alt Read auto-approved
+    G->>L: allow execute
+    L->>API: call request
+    API-->>L: response
+    L-->>U: result in thread
+  else Write requires approval
+    G->>DB: create approvals + approval_items
+    G->>S: post approval card (Approve/Reject/Review)
+    G-->>L: awaiting_approval
+    L-->>U: request submitted for approval
+
+    U->>S: click Approve/Reject
+    S->>DB: app.ts loads pending approval + auth check
+
+    alt Approved
+      S->>DB: mark approval=approved; append approvedBy
+      S->>E: executeBatchProposal(approvalId)
+      E->>DB: mark executing; load approval_items
+      loop each item
+        E->>API: execute HTTP request with injected credential auth
+        API-->>E: response
+        E->>DB: update item status + response
+      end
+      E->>DB: finalize approval (completed/failed counters)
+      E->>S: update approval card status/progress
+    else Rejected
+      S->>DB: mark approval=rejected
+      S->>S: update card to rejected
+    end
+  end
+```
+
 ## Core Files
 
 - `apps/api/src/lib/tool.ts` - governance interception for `http_request`.
