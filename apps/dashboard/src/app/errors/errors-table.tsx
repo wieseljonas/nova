@@ -72,57 +72,55 @@ export function ErrorsTable({ errors, total, page, pageSize }: Props) {
         )}
       </div>
 
-      <div className="overflow-x-auto">
-        <Table className="min-w-[700px]">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-10" />
-              <TableHead className="w-[180px]">Error</TableHead>
-              <TableHead className="w-[80px]">Code</TableHead>
-              <TableHead>Message</TableHead>
-              <TableHead className="w-[80px]">Status</TableHead>
-              <TableHead className="w-[140px]">Time</TableHead>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-10" />
+            <TableHead className="w-[180px]">Error</TableHead>
+            <TableHead className="w-[80px]">Code</TableHead>
+            <TableHead>Message</TableHead>
+            <TableHead className="w-[80px]">Status</TableHead>
+            <TableHead className="w-[140px]">Time</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {errors.map((err) => (
+            <TableRow key={err.id}>
+              <TableCell>
+                <input
+                  type="checkbox"
+                  checked={selected.has(err.id)}
+                  onChange={() => toggleSelect(err.id)}
+                />
+              </TableCell>
+              <TableCell>
+                <Link href={`/errors/${err.id}`} className="font-medium hover:underline">
+                  {err.errorName}
+                </Link>
+              </TableCell>
+              <TableCell>
+                {err.errorCode ? <Badge variant="outline">{err.errorCode}</Badge> : "—"}
+              </TableCell>
+              <TableCell className="text-sm text-muted-foreground">
+                {truncate(err.errorMessage, 80)}
+              </TableCell>
+              <TableCell>
+                <Badge variant={err.resolved ? "success" : "destructive"}>
+                  {err.resolved ? "Resolved" : "Open"}
+                </Badge>
+              </TableCell>
+              <TableCell className="text-muted-foreground text-sm">{formatDate(err.timestamp)}</TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {errors.map((err) => (
-              <TableRow key={err.id}>
-                <TableCell>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(err.id)}
-                    onChange={() => toggleSelect(err.id)}
-                  />
-                </TableCell>
-                <TableCell>
-                  <Link href={`/errors/${err.id}`} className="font-medium hover:underline">
-                    {err.errorName}
-                  </Link>
-                </TableCell>
-                <TableCell>
-                  {err.errorCode ? <Badge variant="outline">{err.errorCode}</Badge> : "—"}
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {truncate(err.errorMessage, 80)}
-                </TableCell>
-                <TableCell>
-                  <Badge variant={err.resolved ? "success" : "destructive"}>
-                    {err.resolved ? "Resolved" : "Open"}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-muted-foreground text-sm">{formatDate(err.timestamp)}</TableCell>
-              </TableRow>
-            ))}
-            {errors.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                  No errors found
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+          ))}
+          {errors.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                No errors found
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
 
       <Pagination total={total} pageSize={pageSize} page={page} />
     </>

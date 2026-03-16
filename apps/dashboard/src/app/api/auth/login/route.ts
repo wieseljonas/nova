@@ -1,40 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
+import { createSession, getSessionCookieName } from "@/lib/auth";
 import {
-  getAppUrl,
+  buildAppRedirectUrl,
   getSafeReturnTo,
-  signOrigin,
   OAUTH_RETURN_TO_COOKIE,
-  PRODUCTION_URL,
 } from "@/lib/auth-redirect";
 
 export async function GET(request: NextRequest) {
-  const appUrl = getAppUrl();
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
   const returnTo = getSafeReturnTo(request.nextUrl.searchParams.get("returnTo"));
-
-  // Non-production environments delegate to production's OAuth proxy
-  const isProduction = new URL(appUrl).origin === PRODUCTION_URL;
-  if (!isProduction) {
-    const proxyUrl = new URL(`${PRODUCTION_URL}/api/auth/proxy-login`);
-    proxyUrl.searchParams.set("origin", appUrl);
-    proxyUrl.searchParams.set("sig", signOrigin(appUrl));
-    if (returnTo) proxyUrl.searchParams.set("returnTo", returnTo);
-    return NextResponse.redirect(proxyUrl.toString());
-  }
-
   const cookieStore = await cookies();
 
   if (returnTo) {
     cookieStore.set(OAUTH_RETURN_TO_COOKIE, returnTo, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV !== "development",
       sameSite: "lax",
       maxAge: 300,
       path: "/",
     });
   } else {
     cookieStore.delete(OAUTH_RETURN_TO_COOKIE);
+  }
+
+  // In local dev, skip Slack OAuth and create a session directly
+  if (process.env.NODE_ENV === "development") {
+    const adminId = (process.env.AURA_ADMIN_USER_IDS || "").split(",")[0]?.trim();
+    const jwt = await createSession({
+      slackUserId: adminId || "dev-user",
+      name: "Dev Admin",
+      picture: "",
+    });
+    cookieStore.set(getSessionCookieName(), jwt, {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      maxAge: 7 * 24 * 60 * 60,
+      path: "/",
+    });
+    return NextResponse.redirect(buildAppRedirectUrl(appUrl, returnTo));
   }
 
   const state = crypto.randomBytes(16).toString("hex");

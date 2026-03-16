@@ -45,7 +45,7 @@ export function ConversationDetail({
 
   return (
     <>
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-3">
         {!embedded && (
           <Link href="/conversations">
             <Button variant="ghost" size="icon">
@@ -53,15 +53,15 @@ export function ConversationDetail({
             </Button>
           </Link>
         )}
-        <div className="min-w-0 flex-1">
+        <div>
           {!embedded && (
             <h1 className="text-base font-semibold">Conversation Detail</h1>
           )}
-          <p className="text-xs text-muted-foreground font-mono truncate">
+          <p className="text-xs text-muted-foreground font-mono">
             {trace.id}
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="ml-auto flex items-center gap-2">
           <Badge
             variant={trace.sourceType === "interactive" ? "default" : "secondary"}
           >
@@ -78,7 +78,7 @@ export function ConversationDetail({
         </div>
       </div>
 
-      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid gap-3 md:grid-cols-5">
         <Card>
           <CardHeader>
             <CardTitle>Timestamp</CardTitle>

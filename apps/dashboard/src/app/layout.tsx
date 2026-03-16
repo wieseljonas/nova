@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import { ThemeProvider } from "next-themes";
 import { Sidebar } from "@/components/sidebar";
-import { DashboardShell } from "@/components/dashboard-shell";
-import { getSession } from "@/lib/auth";
+import { Topbar } from "@/components/topbar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -10,9 +9,7 @@ export const metadata: Metadata = {
   description: "Admin dashboard for Aura AI agent",
 };
 
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const session = await getSession();
-
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -24,9 +21,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <div className="flex h-screen overflow-hidden">
             <Sidebar />
-            <DashboardShell session={session}>
-              {children}
-            </DashboardShell>
+            <div className="flex flex-1 flex-col overflow-hidden">
+              <Topbar />
+              <main className="flex-1 overflow-y-auto">
+                <div className="px-4 py-3 md:px-5 md:py-4">{children}</div>
+              </main>
+            </div>
           </div>
         </ThemeProvider>
       </body>

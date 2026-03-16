@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select } from "@/components/ui/select";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { setSetting } from "./actions";
@@ -84,41 +84,32 @@ export function SettingsForm({ settings }: { settings: Setting[] }) {
       <Card>
         <CardHeader><CardTitle className="text-base">Model Selection</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-3">
             <div>
               <label className="text-sm font-medium mb-1 block">Main Model</label>
-              <Select value={mainModel || "__default"} onValueChange={(v) => setMainModel(v === "__default" ? "" : v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__default">Default</SelectItem>
-                  {MAIN_MODELS.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
+              <Select value={mainModel} onChange={(e) => setMainModel(e.target.value)}>
+                <option value="">Default</option>
+                {MAIN_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
               </Select>
             </div>
             <div>
               <label className="text-sm font-medium mb-1 block">Fast Model</label>
-              <Select value={fastModel || "__default"} onValueChange={(v) => setFastModel(v === "__default" ? "" : v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__default">Default</SelectItem>
-                  {FAST_MODELS.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
+              <Select value={fastModel} onChange={(e) => setFastModel(e.target.value)}>
+                <option value="">Default</option>
+                {FAST_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
               </Select>
             </div>
             <div>
               <label className="text-sm font-medium mb-1 block">Embedding Model</label>
-              <Select value={embeddingModel || "__default"} onValueChange={(v) => setEmbeddingModel(v === "__default" ? "" : v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__default">Default</SelectItem>
-                  {EMBEDDING_MODELS.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
+              <Select value={embeddingModel} onChange={(e) => setEmbeddingModel(e.target.value)}>
+                <option value="">Default</option>
+                {EMBEDDING_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
               </Select>
             </div>
           </div>
@@ -131,35 +122,33 @@ export function SettingsForm({ settings }: { settings: Setting[] }) {
       <Card>
         <CardHeader><CardTitle className="text-base">All Settings</CardTitle></CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <Table className="min-w-[550px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[200px]">Key</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead className="w-[140px]">Updated</TableHead>
-                  <TableHead className="w-[120px]">By</TableHead>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[200px]">Key</TableHead>
+                <TableHead>Value</TableHead>
+                <TableHead className="w-[140px]">Updated</TableHead>
+                <TableHead className="w-[120px]">By</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {nonModelSettings.map((s) => (
+                <TableRow key={s.key}>
+                  <TableCell className="font-mono text-sm">{s.key}</TableCell>
+                  <TableCell className="text-sm">{s.value}</TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{formatDate(s.updatedAt)}</TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{s.updatedBy || "—"}</TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {nonModelSettings.map((s) => (
-                  <TableRow key={s.key}>
-                    <TableCell className="font-mono text-sm">{s.key}</TableCell>
-                    <TableCell className="text-sm">{s.value}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{formatDate(s.updatedAt)}</TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{s.updatedBy || "—"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+              ))}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader><CardTitle className="text-base">Edit Setting</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2">
             <Input placeholder="Key" value={editKey} onChange={(e) => setEditKey(e.target.value)} />
             <Input placeholder="Value" value={editValue} onChange={(e) => setEditValue(e.target.value)} />
           </div>

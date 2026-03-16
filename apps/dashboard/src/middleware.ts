@@ -26,7 +26,6 @@ export async function middleware(request: NextRequest) {
 
   try {
     const { payload } = await jwtVerify(token, getSecret());
-    if (payload.purpose) throw new Error("Invalid token type");
     const response = NextResponse.next();
     response.headers.set("x-user-id", payload.slackUserId as string);
     response.headers.set("x-user-name", payload.name as string);
