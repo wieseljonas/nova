@@ -49,7 +49,6 @@ type PartRow = {
 
 export async function createConversationTrace(params: {
   sourceType: "job_execution" | "interactive";
-  source?: string;
   jobExecutionId?: string;
   channelId?: string;
   threadTs?: string;
@@ -60,7 +59,6 @@ export async function createConversationTrace(params: {
     .insert(conversationTraces)
     .values({
       sourceType: params.sourceType,
-      source: params.source ?? "slack",
       jobExecutionId: params.jobExecutionId ?? null,
       channelId: params.channelId ?? null,
       threadTs: params.threadTs ?? null,

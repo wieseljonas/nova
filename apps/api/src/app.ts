@@ -4,7 +4,7 @@ import { waitUntil } from "@vercel/functions";
 import { cronApp } from "./cron/consolidate.js";
 import { heartbeatApp } from "./cron/heartbeat.js";
 import { elevenlabsWebhookApp } from "./webhook/elevenlabs.js";
-import { dashboardChatApp } from "./routes/dashboard-chat.js";
+import { executeNowApp } from "./routes/execute-now.js";
 import { runPipeline } from "./pipeline/index.js";
 import {
   publishHomeTab,
@@ -14,9 +14,11 @@ import {
   openCredentialModal,
   openAddCredentialModal,
   buildAddCredentialBlocks,
+  buildUpdateCredentialBlocks,
   openUpdateCredentialModal,
   openShareCredentialModal,
   openCredentialAccessModal,
+  openCredentialPermissionsModal,
 } from "./slack/home.js";
 import {
   storeApiCredential,
@@ -24,9 +26,9 @@ import {
   grantApiCredentialAccess,
   listApiCredentials,
   hasPermission,
+  updateCredentialMethods,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
-import { handleApprovalReaction } from "./lib/approval.js";
 import { executionContext } from "./lib/tool.js";
 import { setSetting } from "./lib/settings.js";
 import { logger } from "./lib/logger.js";
@@ -58,7 +60,7 @@ export const app = new Hono();
 // Health check
 app.get("/", (c) => {
   return c.json({
-    name: "Aura",
+    name: "Nova",
     version: "0.1.0",
     status: "alive",
   });
@@ -110,12 +112,10 @@ app.get("/api/memories/search", async (c) => {
 // Mount cron routes
 app.route("/", cronApp);
 app.route("/", heartbeatApp);
+app.route("/api/execute-now", executeNowApp);
 
 // Mount ElevenLabs voice webhook routes
 app.route("/api/webhook/elevenlabs", elevenlabsWebhookApp);
-
-// Mount dashboard chat route
-app.route("/api/dashboard/chat", dashboardChatApp);
 
 // ── Slack Signature Verification ────────────────────────────────────────────
 
@@ -204,39 +204,10 @@ app.post("/api/slack/events", async (c) => {
   if (body.event) {
     const event = body.event;
 
-    // Handle reaction events -- store as memory + governance approval
+    // Handle reaction events -- store as memory
     if (event.type === "reaction_added" && event.user && event.item) {
       const reactionPromise = (async () => {
         try {
-          // ── Governance: check if this is an approval/rejection reaction ──
-          if (
-            event.item?.type === "message" &&
-            ["white_check_mark", "x"].includes(event.reaction)
-          ) {
-            try {
-              const msgResult = await slackClient.conversations.history({
-                channel: event.item.channel,
-                latest: event.item.ts,
-                limit: 1,
-                inclusive: true,
-              });
-              const msg = msgResult.messages?.[0];
-              const actionLogId = (msg?.metadata as any)?.event_payload?.action_log_id;
-
-              if (actionLogId) {
-                await handleApprovalReaction({
-                  actionLogId,
-                  reaction: event.reaction,
-                  reactorUserId: event.user,
-                  slackClient,
-                });
-                return;
-              }
-            } catch (approvalErr) {
-              logger.warn("Failed to process approval reaction", { error: approvalErr });
-            }
-          }
-
           // ── Store as a lightweight memory via the store module ──
           let userName = event.user;
           try {
@@ -250,7 +221,6 @@ app.post("/api/slack/events", async (c) => {
 
           const { storeMessage } = await import("./memory/store.js");
           await storeMessage({
-            externalId: `reaction-${event.event_ts}`,
             slackTs: `reaction-${event.event_ts}`,
             channelId: event.item.channel || "",
             channelType: "public_channel",
@@ -474,6 +444,7 @@ app.post("/api/slack/interactions", async (c) => {
 
       // ── User API Credential actions ──────────────────────────────────
       if (action.action_id === "api_credential_add" && payload.trigger_id) {
+        if (!isAdmin(userId)) continue;
         const addPromise = openAddCredentialModal(
           slackClient,
           payload.trigger_id,
@@ -483,32 +454,60 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(addPromise);
       }
 
-      // Dynamic modal: swap fields when credential type changes
-      if (action.action_id === "cred_type" && payload.view) {
-        const selectedType = (action.selected_option?.value || "token") as "token" | "oauth_client";
+      // Dynamic modal: swap fields when credential auth scheme changes
+      if (action.action_id === "cred_auth_scheme" && payload.view) {
+        const selectedScheme = (action.selected_option?.value || "bearer") as
+          | "bearer"
+          | "basic"
+          | "header"
+          | "query"
+          | "oauth_client"
+          | "google_service_account";
         // Preserve the name field value if already filled
         const currentName = payload.view.state?.values?.cred_name_block?.cred_name?.value || "";
-        const blocks = buildAddCredentialBlocks(selectedType);
-        // Inject current name value into the block
-        if (currentName) {
-          const nameBlock = blocks.find((b: any) => b.block_id === "cred_name_block");
-          if (nameBlock) {
-            nameBlock.element.initial_value = currentName;
-          }
+        const isAdd = payload.view.callback_id === "api_credential_add_submit";
+        const blocks = isAdd
+          ? buildAddCredentialBlocks(selectedScheme)
+          : [
+              ...buildUpdateCredentialBlocks(selectedScheme),
+              {
+                type: "context",
+                elements: [
+                  {
+                    type: "mrkdwn",
+                    text: "This will replace the current credential value. Encrypted at rest with AES-256-GCM.",
+                  },
+                ],
+              },
+            ];
+
+        if (isAdd && currentName) {
+          const nameBlock = blocks.find(
+            (b: any) => b.block_id === "cred_name_block",
+          );
+          if (nameBlock) nameBlock.element.initial_value = currentName;
         }
+
+        const titleText =
+          payload.view.title?.text ||
+          (isAdd ? "Add API Credential" : "Update Credential");
         const updatePromise = slackClient.views.update({
           view_id: payload.view.id,
           hash: payload.view.hash,
           view: {
             type: "modal",
-            callback_id: "api_credential_add_submit",
-            title: { type: "plain_text", text: "Add API Credential" },
+            callback_id: payload.view.callback_id,
+            private_metadata: payload.view.private_metadata,
+            title: { type: "plain_text", text: titleText },
             submit: { type: "plain_text", text: "Save" },
             close: { type: "plain_text", text: "Cancel" },
             blocks,
           },
         }).catch((err: unknown) => {
-          recordError("interactions.cred_type_switch", err, { userId, selectedType });
+          recordError("interactions.cred_auth_scheme_switch", err, {
+            userId,
+            selectedScheme,
+          });
         });
         waitUntil(updatePromise);
       }
@@ -523,11 +522,14 @@ app.post("/api/slack/interactions", async (c) => {
             const creds = await listApiCredentials(userId);
             const cred = creds.find((c) => c.id === credId);
             const credName = cred?.name ?? "credential";
+            const credAuthScheme = (cred?.authScheme ??
+              "bearer") as "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account";
             const updatePromise = openUpdateCredentialModal(
               slackClient,
               payload.trigger_id,
               credId,
               credName,
+              credAuthScheme,
             ).catch((err) => {
               recordError("interactions.api_credential_update_modal", err, { userId, credId });
             });
@@ -568,6 +570,26 @@ app.post("/api/slack/interactions", async (c) => {
             recordError("interactions.api_credential_access_modal", err, { userId, credId });
           });
           waitUntil(accessPromise);
+        } else if (selectedValue.startsWith("api_credential_permissions_") && payload.trigger_id) {
+          const credId = selectedValue.replace("api_credential_permissions_", "");
+          const permissionsPromise = (async () => {
+            try {
+              const creds = await listApiCredentials(userId);
+              const cred = creds.find((c) => c.id === credId);
+              if (cred) {
+                await openCredentialPermissionsModal(
+                  slackClient,
+                  payload.trigger_id!,
+                  credId,
+                  cred.name,
+                  cred.allowed_methods,
+                );
+              }
+            } catch (err) {
+              recordError("interactions.api_credential_permissions_modal", err, { userId, credId });
+            }
+          })();
+          waitUntil(permissionsPromise);
         }
       }
 
@@ -623,62 +645,375 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(denyPromise);
       }
 
-      // ── Governance approval buttons ─────────────────────────────────
-      if (action.action_id?.startsWith("governance_approve_")) {
-        const actionLogId = action.action_id.replace("governance_approve_", "");
+      // ── Unified approval system buttons ─────────────────────────────────
+      if (action.action_id?.startsWith("approval_approve_")) {
+        const approvalId = action.action_id.replace("approval_approve_", "");
+
         const approvePromise = (async () => {
           try {
-            const { handleApprovalReaction } = await import("./lib/approval.js");
-            await handleApprovalReaction({
-              actionLogId,
-              reaction: "white_check_mark",
-              reactorUserId: userId,
-              slackClient,
-            });
-            const gaChanId = payload.channel?.id;
-            const gaTs = payload.message?.ts;
-            if (gaChanId && gaTs) {
-              await slackClient.chat.update({
-                channel: gaChanId,
-                ts: gaTs,
-                text: `✅ Approved by <@${userId}>`,
-                blocks: [{ type: "section" as const, text: { type: "mrkdwn" as const, text: `✅ *Approved* by <@${userId}>` } }],
+            const { approvals, jobs } = await import("@aura/db/schema");
+            const { eq, sql } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+            const { isAdmin } = await import("./lib/permissions.js");
+
+            // First, fetch the current approval to check authorization and state
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (!approval) {
+              logger.error("Approval not found", { approvalId });
+              return;
+            }
+
+            // Check if approval is still pending
+            if (approval.status !== "pending") {
+              logger.warn("Approval is not pending", { approvalId, status: approval.status, userId });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: `This approval has already been ${approval.status}.`,
+                });
+              }
+              return;
+            }
+
+            // BUG FIX 1: Authorization check
+            const approverIds = approval.approverIds ?? [];
+            const isAuthorized = 
+              isAdmin(userId) || 
+              (approverIds.length === 0 ? isAdmin(userId) : approverIds.includes(userId));
+
+            if (!isAuthorized) {
+              logger.warn("Unauthorized approval attempt", { approvalId, userId, approverIds });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: "You're not authorized to approve this.",
+                });
+              }
+              return;
+            }
+
+            // BUG FIX 2: Implement all_must approval mode logic
+            const approvalMode = approval.approvalMode ?? "any_one";
+            const requiredApprovals = approval.requiredApprovals ?? 1;
+            const currentApprovedBy = approval.approvedBy ?? [];
+
+            // Check if user already approved (prevent duplicate approvals)
+            if (currentApprovedBy.includes(userId)) {
+              logger.info("User already approved this approval", { approvalId, userId });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: "You've already approved this.",
+                });
+              }
+              return;
+            }
+
+            // Atomically append userId to approvedBy array
+            const updatedRows = await db
+              .update(approvals)
+              .set({
+                approvedBy: sql`array_append(${approvals.approvedBy}, ${userId})`,
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId))
+              .returning();
+
+            const updatedApproval = updatedRows[0];
+            if (!updatedApproval) {
+              logger.error("Failed to update approval", { approvalId });
+              return;
+            }
+
+            const newApprovedBy = updatedApproval.approvedBy ?? [];
+            const approvalCount = newApprovedBy.length;
+
+            // Determine if execution should proceed
+            let shouldExecute = false;
+            if (approvalMode === "any_one") {
+              // For any_one mode, first approval triggers execution
+              shouldExecute = true;
+            } else if (approvalMode === "all_must") {
+              // For all_must mode, check if threshold is met
+              shouldExecute = approvalCount >= requiredApprovals;
+            }
+
+            if (shouldExecute) {
+              // Transition to approved and create execution job
+              await db
+                .update(approvals)
+                .set({
+                  status: "approved",
+                  updatedAt: new Date(),
+                })
+                .where(eq(approvals.id, approvalId));
+
+              const [job] = await db
+                .insert(jobs)
+                .values({
+                  name: `batch-execution-${approvalId}`,
+                  description: `Execute batch approval: ${approval.title}`,
+                  status: "pending",
+                  requestedBy: approval.requestedBy,
+                  priority: "high",
+                  channelId: approval.requestedInChannel ?? null,
+                })
+                .returning({ id: jobs.id });
+
+              // Link job to approval
+              await db
+                .update(approvals)
+                .set({ jobId: job.id })
+                .where(eq(approvals.id, approvalId));
+
+              // Trigger immediate execution via /api/execute-now
+              const cronSecret = process.env.CRON_SECRET;
+              if (cronSecret) {
+                const executeUrl = `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/execute-now`;
+                await fetch(executeUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${cronSecret}`,
+                  },
+                  body: JSON.stringify({ jobId: job.id, approvalId }),
+                });
+              }
+
+              logger.info("Batch approval approved and job created", {
+                approvalId,
+                jobId: job.id,
+                approvedBy: newApprovedBy,
               });
+            } else {
+              // For all_must mode: not enough approvals yet, update the Slack card to show progress
+              logger.info("Approval recorded, waiting for more approvals", {
+                approvalId,
+                approvalMode,
+                approvalCount,
+                requiredApprovals,
+                approvedBy: newApprovedBy,
+              });
+
+              // Update Slack message to show approval progress
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                try {
+                  const progressText = `Approved by ${approvalCount}/${requiredApprovals}: ${newApprovedBy.map((id: string) => `<@${id}>`).join(", ")}`;
+                  await slackClient.chat.postEphemeral({
+                    channel: channelId,
+                    user: userId,
+                    text: `✓ Your approval recorded. ${progressText}`,
+                  });
+                } catch (updateErr) {
+                  logger.warn("Failed to send approval progress message", { approvalId, error: updateErr });
+                }
+              }
             }
           } catch (err) {
-            recordError("interactions.governance_approve", err, { userId, actionLogId });
+            recordError("interactions.approval_approve", err, { userId, approvalId });
+            logger.error("Approval button handler failed", { userId, approvalId, error: err });
           }
         })();
         waitUntil(approvePromise);
       }
 
-      if (action.action_id?.startsWith("governance_reject_")) {
-        const actionLogId = action.action_id.replace("governance_reject_", "");
+      if (action.action_id?.startsWith("approval_reject_")) {
+        const approvalId = action.action_id.replace("approval_reject_", "");
+
         const rejectPromise = (async () => {
           try {
-            const { handleApprovalReaction } = await import("./lib/approval.js");
-            await handleApprovalReaction({
-              actionLogId,
-              reaction: "x",
-              reactorUserId: userId,
-              slackClient,
-            });
-            const grChanId = payload.channel?.id;
-            const grTs = payload.message?.ts;
-            if (grChanId && grTs) {
+            const { approvals } = await import("@aura/db/schema");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+            const { isAdmin } = await import("./lib/permissions.js");
+
+            // First, fetch the current approval to check authorization and state
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (!approval) {
+              logger.error("Approval not found for rejection", { approvalId });
+              return;
+            }
+
+            // Check if approval is still pending
+            if (approval.status !== "pending") {
+              logger.warn("Rejection attempt on non-pending approval", { approvalId, status: approval.status, userId });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: `This approval has already been ${approval.status}.`,
+                });
+              }
+              return;
+            }
+
+            // Authorization check
+            const approverIds = approval.approverIds ?? [];
+            const isAuthorized = 
+              isAdmin(userId) || 
+              (approverIds.length === 0 ? isAdmin(userId) : approverIds.includes(userId));
+
+            if (!isAuthorized) {
+              logger.warn("Unauthorized rejection attempt", { approvalId, userId, approverIds });
+              const channelId = payload.channel?.id;
+              if (channelId) {
+                await slackClient.chat.postEphemeral({
+                  channel: channelId,
+                  user: userId,
+                  text: "You're not authorized to reject this.",
+                });
+              }
+              return;
+            }
+
+            // Update approval status
+            await db
+              .update(approvals)
+              .set({
+                status: "rejected",
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            // Update Slack card
+            if (approval?.slackChannel && approval.slackMessageTs) {
               await slackClient.chat.update({
-                channel: grChanId,
-                ts: grTs,
-                text: `❌ Rejected by <@${userId}>`,
-                blocks: [{ type: "section" as const, text: { type: "mrkdwn" as const, text: `❌ *Rejected* by <@${userId}>` } }],
+                channel: approval.slackChannel,
+                ts: approval.slackMessageTs,
+                text: `Rejected by <@${userId}>`,
+                attachments: [
+                  {
+                    color: "#e01e5a",
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `*❌ ${approval.title}*`,
+                        },
+                      },
+                      {
+                        type: "context",
+                        elements: [
+                          {
+                            type: "mrkdwn",
+                            text: `Rejected by <@${userId}>`,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
               });
             }
+
+            logger.info("Batch approval rejected", {
+              approvalId,
+              rejectedBy: userId,
+            });
           } catch (err) {
-            recordError("interactions.governance_reject", err, { userId, actionLogId });
+            recordError("interactions.approval_reject", err, { userId, approvalId });
+            logger.error("Rejection button handler failed", { userId, approvalId, error: err });
           }
         })();
         waitUntil(rejectPromise);
       }
+
+      if (action.action_id?.startsWith("approval_review_") && payload.trigger_id) {
+        const approvalId = action.action_id.replace("approval_review_", "");
+
+        const reviewPromise = (async () => {
+          try {
+            const { approvals, approvalItems } = await import("@aura/db/schema");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (!approval) {
+              logger.warn("Review: approval not found", { approvalId });
+              return;
+            }
+
+            const items = await db
+              .select()
+              .from(approvalItems)
+              .where(eq(approvalItems.approvalId, approvalId))
+              .orderBy(approvalItems.sequenceNum)
+              .limit(10);
+
+            const itemsText = items.map((item, idx) => 
+              `${idx + 1}. \`${item.method}\` ${item.url}`
+            ).join("\n");
+
+            const totalText = approval.totalItems > 10 
+              ? `\n\n_Showing first 10 of ${approval.totalItems} items_` 
+              : "";
+
+            const modal: any = {
+              type: "modal",
+              title: {
+                type: "plain_text",
+                text: "Approval Items",
+                emoji: true,
+              },
+              close: {
+                type: "plain_text",
+                text: "Close",
+              },
+              blocks: [
+                {
+                  type: "header",
+                  text: {
+                    type: "plain_text",
+                    text: approval.title,
+                    emoji: true,
+                  },
+                },
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `*Items to execute:*\n${itemsText}${totalText}`,
+                  },
+                },
+              ],
+            };
+
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
+          } catch (err) {
+            recordError("interactions.approval_review", err, { userId, approvalId });
+            logger.error("Review modal failed", { userId, approvalId, error: err });
+          }
+        })();
+        waitUntil(reviewPromise);
+      }
+
     }
   }
 
@@ -709,42 +1044,118 @@ app.post("/api/slack/interactions", async (c) => {
       }
     }
 
-    if (callbackId === "api_credential_add_submit" && userId) {
-      const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
-      const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
-      const credType = (payload.view?.state?.values?.cred_type_block?.cred_type?.selected_option?.value || "token") as "token" | "oauth_client";
 
-      let value: string | undefined;
-      let tokenUrl: string | undefined;
-      if (credType === "oauth_client") {
-        const clientId = payload.view?.state?.values?.cred_client_id_block?.cred_client_id?.value;
-        const clientSecret = payload.view?.state?.values?.cred_client_secret_block?.cred_client_secret?.value;
-        tokenUrl = payload.view?.state?.values?.cred_token_url_block?.cred_token_url?.value || undefined;
-        if (clientId && clientSecret) {
-          value = JSON.stringify({ client_id: clientId, client_secret: clientSecret });
-        }
-      } else {
-        value = payload.view?.state?.values?.cred_value_block?.cred_value?.value;
+/** Extract credential value from modal state based on auth scheme */
+function extractCredentialValue(
+  values: Record<string, any> | undefined,
+  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account"
+): string | undefined {
+  if (authScheme === "oauth_client") {
+    const clientId = values?.cred_client_id_block?.cred_client_id?.value;
+    const clientSecret = values?.cred_client_secret_block?.cred_client_secret?.value;
+    const tokenUrl = values?.cred_token_url_block?.cred_token_url?.value;
+    if (clientId && clientSecret && tokenUrl) {
+      return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
+    }
+  } else if (authScheme === "basic") {
+    const username = values?.cred_username_block?.cred_username?.value;
+    const password = values?.cred_password_block?.cred_password?.value ?? "";
+    if (username) {
+      return JSON.stringify({ username, password });
+    }
+  } else if (authScheme === "header" || authScheme === "query") {
+    const key = values?.cred_key_block?.cred_key?.value;
+    const secret = values?.cred_secret_block?.cred_secret?.value;
+    if (key && secret) {
+      return JSON.stringify({ key, secret });
+    }
+  } else if (authScheme === "google_service_account") {
+    const jsonKey = values?.cred_gsa_json_block?.cred_gsa_json?.value;
+    const scopes = values?.cred_gsa_scopes_block?.cred_gsa_scopes?.value;
+    if (jsonKey) {
+      // Embed scopes into the JSON key so they're stored together
+      try {
+        const parsed = JSON.parse(jsonKey);
+        if (scopes) parsed.scopes = scopes;
+        return JSON.stringify(parsed);
+      } catch {
+        return undefined; // Invalid JSON -- validation will catch this
       }
+    }
+  } else {
+    return values?.cred_value_block?.cred_value?.value;
+  }
+  return undefined;
+}
+
+    if (callbackId === "api_credential_add_submit" && userId) {
+      if (!isAdmin(userId)) return c.json({});
+      const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
+      const description = payload.view?.state?.values?.cred_description_block?.cred_description?.value || null;
+      const expiryStr = payload.view?.state?.values?.cred_expiry_block?.cred_expiry?.selected_date;
+      const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
+        | "bearer"
+        | "basic"
+        | "header"
+        | "query"
+        | "oauth_client"
+        | "google_service_account";
+
+      const value = extractCredentialValue(payload.view?.state?.values, authScheme);
 
       if (name && value) {
 
         const expiresAt = expiryStr ? new Date(expiryStr) : undefined;
         const addPromise = (async () => {
           try {
-            await storeApiCredential(userId, name, value, expiresAt, credType, tokenUrl);
+            const cred = await storeApiCredential(userId, name, value, expiresAt, authScheme);
+            if (description) {
+              const { db: db2 } = await import("./db/client.js");
+              const { credentials: credTable } = await import("@aura/db/schema");
+              const { eq: eq2 } = await import("drizzle-orm");
+              await db2.update(credTable).set({ description }).where(eq2(credTable.id, cred.id));
+            }
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_add", err, { userId, name });
+            try {
+              await slackClient.chat.postMessage({
+                channel: userId,
+                text: `Failed to save credential "${name}": ${err instanceof Error ? err.message : String(err)}`,
+              });
+            } catch { /* best effort */ }
           }
         })();
         waitUntil(addPromise);
+      } else if (name && !value) {
+        // Value extraction failed -- return validation error to the modal
+        console.warn(`[credential-add] value extraction failed for scheme=${authScheme}, user=${userId}, name=${name}`);
+        const errorBlock = authScheme === "basic" ? "cred_username_block"
+          : authScheme === "oauth_client" ? "cred_client_id_block"
+          : authScheme === "google_service_account" ? "cred_gsa_json_block"
+          : authScheme === "header" || authScheme === "query" ? "cred_secret_block"
+          : "cred_value_block";
+        return c.json({
+          response_action: "errors",
+          errors: {
+            [errorBlock]: "Required field is missing. Please fill in all required fields.",
+          },
+        });
       }
     }
 
     if (callbackId === "api_credential_update_submit" && userId) {
       const credentialId = payload.view?.private_metadata;
-      const value = payload.view?.state?.values?.cred_value_block?.cred_value?.value;
+      const authScheme = (payload.view?.state?.values?.cred_auth_scheme_block?.cred_auth_scheme?.selected_option?.value || "bearer") as
+        | "bearer"
+        | "basic"
+        | "header"
+        | "query"
+        | "oauth_client"
+        | "google_service_account";
+
+      const value = extractCredentialValue(payload.view?.state?.values, authScheme);
+      const updateDescription = payload.view?.state?.values?.cred_description_block?.cred_description?.value ?? null;
 
       if (credentialId && value) {
         const updatePromise = (async () => {
@@ -763,7 +1174,19 @@ app.post("/api/slack/interactions", async (c) => {
               return;
             }
 
-            await storeApiCredential(cred.owner_id, cred.name, value, cred.expires_at ?? undefined, (cred.type as "token" | "oauth_client") ?? "token");
+            const updatedCred = await storeApiCredential(
+              cred.owner_id,
+              cred.name,
+              value,
+              cred.expires_at ?? undefined,
+              authScheme,
+            );
+            if (updateDescription !== null) {
+              const { db: db3 } = await import("./db/client.js");
+              const { credentials: credTable3 } = await import("@aura/db/schema");
+              const { eq: eq3 } = await import("drizzle-orm");
+              await db3.update(credTable3).set({ description: updateDescription || null }).where(eq3(credTable3.id, updatedCred.id));
+            }
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_update", err, { userId, credentialId });
@@ -788,6 +1211,24 @@ app.post("/api/slack/interactions", async (c) => {
           }
         })();
         waitUntil(sharePromise);
+      }
+    }
+
+    if (callbackId === "api_credential_permissions_submit" && userId) {
+      const credentialId = payload.view?.private_metadata;
+      const selectedOptions = payload.view?.state?.values?.methods_block?.methods_checkboxes?.selected_options ?? [];
+      const allowedMethods = selectedOptions.map((opt: any) => opt.value);
+
+      if (credentialId) {
+        const permissionsPromise = (async () => {
+          try {
+            await updateCredentialMethods(credentialId, userId, allowedMethods);
+            await publishHomeTab(slackClient, userId);
+          } catch (err) {
+            recordError("interactions.api_credential_permissions_update", err, { userId, credentialId });
+          }
+        })();
+        waitUntil(permissionsPromise);
       }
     }
 
@@ -821,7 +1262,7 @@ app.get("/api/oauth/google/auth-url", async (c) => {
     url,
     instructions: userId
       ? `Open this URL in a browser logged in as the Gmail account for Slack user ${userId}`
-      : "Open this URL in a browser logged in as your Aura email account",
+      : "Open this URL in a browser logged in as your Nova email account",
   });
 });
 

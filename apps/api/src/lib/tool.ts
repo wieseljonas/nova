@@ -3,9 +3,9 @@ import { tool, type Tool } from "ai";
 import { eq } from "drizzle-orm";
 import type { ZodType } from "zod";
 import { db } from "../db/client.js";
-import { actionLog } from "@aura/db/schema";
-import { lookupPolicy, requestApproval, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
+import { lookupPolicy, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
 import { logger } from "./logger.js";
+import { generateProposalSummary } from "./proposal-summary.js";
 
 // ── Execution Context (AsyncLocalStorage) ────────────────────────────────────
 
@@ -19,23 +19,14 @@ export interface ExecutionContext {
 
 export const executionContext = new AsyncLocalStorage<ExecutionContext>();
 
-// ── PendingApprovalError ─────────────────────────────────────────────────────
-
-export class PendingApprovalError extends Error {
-  constructor(public readonly actionLogId: string) {
-    super(`Action pending approval: ${actionLogId}`);
-    this.name = "PendingApprovalError";
-  }
-}
-
 // ── Slack Card Metadata ──────────────────────────────────────────────────────
 // Co-located with tool definitions via defineTool() so that Slack card behavior
 // (spinner label, input summary, output summary, URL citations) stays in sync
 // with the tool itself instead of drifting in separate switch blocks.
 
 export interface SlackToolMetadata<TInput = any, TOutput = any> {
-  /** Spinner label shown while tool is running, e.g. "Searching the web..." */
-  status: string;
+  /** Spinner label shown while tool is running. Can be static, sync, or async. */
+  status: string | ((input: TInput) => string | Promise<string>);
   /** Extract a short detail from input args for the in-progress card */
   detail?: (input: TInput) => string | undefined;
   /** Extract a short summary from result for the completed card */
@@ -59,6 +50,17 @@ export function getSlackMeta(t: unknown): SlackToolMetadata | undefined {
 }
 
 /**
+ * Retrieve the user-facing description from a tool definition, if present.
+ */
+export function getToolDescription(t: unknown): string | undefined {
+  if (t && typeof t === "object" && "description" in t) {
+    const description = (t as { description?: unknown }).description;
+    return typeof description === "string" ? description : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Mutable name ref stored in a closure so registerToolNames() can fill it
  * in after the tools map is built.
  */
@@ -68,22 +70,13 @@ interface ToolNameRef {
 
 /**
  * Wrapper around AI SDK's tool() that co-locates Slack card metadata with the
- * tool definition and adds a governance interceptor. Every tool call is logged
- * to action_log; destructive-tier calls are gated behind approval.
+ * tool definition and adds SDK-native needsApproval governance + action logging.
  *
- * Usage:
- * ```ts
- * const myTool = defineTool({
- *   description: "...",
- *   inputSchema: z.object({ query: z.string() }),
- *   execute: async ({ query }) => ({ ok: true, results: [] }),
- *   slack: {
- *     status: "Searching...",
- *     detail: (input) => input.query,
- *     output: (result) => `${result.results.length} results`,
- *   },
- * });
- * ```
+ * Tools with write/destructive risk tier use `needsApproval` to pause for
+ * human approval. The SDK emits a `tool-approval-request` output part, and
+ * respond.ts saves conversation state for resumption.
+ *
+ * Read-tier tools execute immediately with action logging.
  */
 export function defineTool<TInput, TOutput>(config: {
   description: string;
@@ -97,6 +90,7 @@ export function defineTool<TInput, TOutput>(config: {
 
   const toolRef: ToolNameRef = {};
 
+  // Wrapped execute that handles governance
   const governedExecute = async (input: TInput): Promise<TOutput> => {
     const toolName = toolRef.name || "unknown";
     const ctx = executionContext.getStore() ?? {
@@ -104,113 +98,112 @@ export function defineTool<TInput, TOutput>(config: {
       triggerType: "autonomous" as const,
     };
 
-    let riskTier: "read" | "write" | "destructive" = "write";
-    let policy: ApprovalPolicy | null = null;
-
-    try {
-      const httpInput = input as Record<string, unknown>;
-      const lookup = await lookupPolicy({
-        toolName,
-        url: toolName === "http_request" ? (httpInput.url as string) : undefined,
-        method: toolName === "http_request" ? (httpInput.method as string) : undefined,
-        credentialName: httpInput.credential_name as string | undefined,
-      });
-      policy = lookup;
-      const httpInput2 = input as Record<string, unknown>;
-      riskTier = effectiveRiskTier(policy, toolName === "http_request" ? (httpInput2.method as string) : undefined);
-    } catch (policyErr) {
-      logger.warn("Governance: policy lookup failed, defaulting to write tier", {
-        toolName,
-        error: policyErr,
-      });
-    }
-
-    // Destructive: write pending log → post approval message → throw
-    if (riskTier === "destructive") {
-      const [logEntry] = await db
-        .insert(actionLog)
-        .values({
-          toolName,
-          params: input as any,
-          triggerType: ctx.triggerType,
-          triggeredBy: ctx.triggeredBy,
-          jobId: ctx.jobId ?? null,
-          credentialName: (input as any)?.credential_name ?? null,
-          riskTier,
-          status: "pending_approval",
-        })
-        .returning({ id: actionLog.id });
-
-      await requestApproval({
-        actionLogId: logEntry.id,
-        toolName,
-        params: input,
-        riskTier,
-        policy: policy,
-        context: ctx,
-      });
-
-      throw new PendingApprovalError(logEntry.id);
-    }
-
-    // Read / Write: execute, then log result
-    let logId: string | undefined;
-
-    try {
-      // Write the log entry before execution (captures params before credential injection)
+    // Only http_request needs approval gating
+    if (toolName === "http_request") {
       try {
-        const [logEntry] = await db
-          .insert(actionLog)
-          .values({
-            toolName,
-            params: input as any,
-            triggerType: ctx.triggerType,
-            triggeredBy: ctx.triggeredBy,
-            jobId: ctx.jobId ?? null,
-            credentialName: (input as any)?.credential_name ?? null,
-            riskTier,
-            status: "executed",
-          })
-          .returning({ id: actionLog.id });
-        logId = logEntry.id;
-      } catch (logErr) {
-        logger.warn("Governance: failed to write action_log entry", {
+        const httpInput = input as Record<string, unknown>;
+        const credentialName = httpInput.credential_name as string | undefined;
+        const method = (httpInput.method as string | undefined) ?? "GET";
+        const url = httpInput.url as string | undefined ?? "";
+
+        // Check credential-level allowed methods
+        const credentialOwner = httpInput.credential_owner as string | undefined ?? ctx.triggeredBy;
+        if (credentialName && credentialOwner) {
+          const { getCredentialMethods } = await import("./api-credentials.js");
+          const allowedMethods = await getCredentialMethods(credentialName, credentialOwner);
+          if (allowedMethods && allowedMethods.length > 0) {
+            const methodUpper = method.toUpperCase();
+            if (allowedMethods.map(m => m.toUpperCase()).includes(methodUpper)) {
+              // Method is in the allowed list, skip approval
+              return originalExecute(input);
+            }
+          }
+        }
+
+        const policy = await lookupPolicy({
           toolName,
-          error: logErr,
+          url,
+          method,
+          credentialName,
         });
-      }
 
-      const result = await originalExecute(input);
+        const { effectiveAction } = await import("./approval.js");
+        const action = effectiveAction(policy, method);
 
-      // Update log with result
-      if (logId) {
-        try {
-          await db
-            .update(actionLog)
-            .set({ result: result as any })
-            .where(eq(actionLog.id, logId));
-        } catch { /* non-critical */ }
-      }
+        // Handle deny action
+        if (action === "deny") {
+          throw new Error(`Action denied by governance policy: ${policy?.name ?? "default"}`);
+        }
 
-      return result;
-    } catch (error: any) {
-      // Update log with failure status
-      if (logId) {
-        try {
-          await db
-            .update(actionLog)
-            .set({
-              status: "failed",
-              result: { error: error.message } as any,
-            })
-            .where(eq(actionLog.id, logId));
-        } catch { /* non-critical */ }
+        // Handle auto-approve action
+        if (action === "auto_approve") {
+          return originalExecute(input);
+        }
+
+        // Handle require_approval action
+        if (action === "require_approval") {
+          const { createProposal } = await import("./batch-executor.js");
+          const summary = await generateProposalSummary({
+            credentialName,
+            method,
+            url,
+            body: httpInput.body,
+            itemCount: 1,
+            reason: httpInput.reason as string | undefined,
+          });
+          const result = await createProposal({
+            title: summary.title,
+            description: summary.description,
+            credentialName,
+            credentialOwner,
+            items: [{
+              method,
+              url,
+              body: httpInput.body,
+              headers: httpInput.headers as Record<string, string> | undefined,
+            }],
+            requestedBy: ctx.triggeredBy,
+            requestedInChannel: ctx.channelId,
+            requestedInThread: ctx.threadTs,
+          });
+
+          if (!result.ok) {
+            throw new Error(`Failed to create approval proposal: ${result.error}`);
+          }
+
+          // Return a special message to the LLM indicating approval is pending
+          return {
+            status: "awaiting_approval",
+            proposal_id: result.approvalId,
+            message: "This request has been submitted for approval. I'll execute it once approved.",
+          } as TOutput;
+        }
+
+        // Default: auto-approve
+        return originalExecute(input);
+      } catch (err) {
+        logger.warn("Governance check failed, failing closed (denying)", {
+          toolName,
+          error: err,
+        });
+        throw err;
       }
-      throw error;
     }
+
+    // All other tools execute without approval
+    return originalExecute(input);
   };
 
-  const toolConfig = { ...rest, execute: governedExecute };
+  const toolConfig: Record<string, unknown> = {
+    description: rest.description,
+    inputSchema: rest.inputSchema,
+    execute: governedExecute,
+  };
+
+  if (rest.toModelOutput) {
+    toolConfig.toModelOutput = rest.toModelOutput;
+  }
+
   const t = tool<TInput, TOutput>(
     toolConfig as unknown as Tool<TInput, TOutput>,
   );

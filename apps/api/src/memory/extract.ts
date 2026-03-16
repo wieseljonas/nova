@@ -7,7 +7,6 @@ import { logger } from "../lib/logger.js";
 import { getUserList } from "../tools/slack.js";
 import type { NewMemory } from "@aura/db/schema";
 import type { ChannelType } from "../pipeline/context.js";
-import type { DbChannelType } from "./store.js";
 
 // ── User ID Normalization ───────────────────────────────────────────────────
 
@@ -149,7 +148,7 @@ const extractedMemoriesSchema = z.object({
       shareable: z
         .boolean()
         .describe(
-          "True only if the user explicitly asked Aura to share this info with someone specific",
+          "True only if the user explicitly asked Nova to share this info with someone specific",
         )
         .default(false),
     }),
@@ -174,15 +173,15 @@ Types of memories to extract:
 Rules:
 - Be concise — each memory should be one clear sentence.
 - Include the person's name or Slack user ID when relevant.
-- Don't extract things Aura already knows (if they're in the context).
-- If the user explicitly asks Aura to tell someone something, mark that memory as shareable.
+- Don't extract things Nova already knows (if they're in the context).
+- If the user explicitly asks Nova to tell someone something, mark that memory as shareable.
 - Return an empty array if there's nothing worth remembering.`;
 
 interface ExtractionContext {
   userMessage: string;
   assistantResponse: string;
   userId: string;
-  channelType: ChannelType | DbChannelType;
+  channelType: ChannelType;
   sourceMessageId?: string;
   displayName?: string;
 }
@@ -195,7 +194,7 @@ export async function extractMemories(context: ExtractionContext): Promise<void>
   const start = Date.now();
 
   try {
-    const conversationText = `User (${context.displayName || context.userId}): ${context.userMessage}\n\nAura: ${context.assistantResponse}`;
+    const conversationText = `User (${context.displayName || context.userId}): ${context.userMessage}\n\nNova: ${context.assistantResponse}`;
 
     const model = await getFastModel();
 

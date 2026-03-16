@@ -44,11 +44,11 @@ export interface ConversationContext {
   thread: SlackThreadMessage[] | null;
   /** Recent top-level channel/DM messages (for non-threaded context). */
   recentMessages: SlackThreadMessage[];
-  /** Whether Aura has replied in the current thread. */
+  /** Whether Nova has replied in the current thread. */
   isAuraParticipant: boolean;
-  /** Whether the thread parent message is Aura's. */
+  /** Whether the thread parent message is Nova's. */
   isAuraThread: boolean;
-  /** Whether Aura posted recently in the channel (within 1h, for non-threaded context). */
+  /** Whether Nova posted recently in the channel (within 1h, for non-threaded context). */
   auraRecentlyActive: boolean;
 }
 
@@ -182,7 +182,7 @@ export async function fetchConversationContext(
         const userId = msg.user || msg.bot_id || "unknown";
         const isBot = msg.user === botUserId;
         const { name: displayName } = isBot
-          ? { name: "Aura" }
+          ? { name: "Nova" }
           : await resolveDisplayName(client, userId);
         const toolCalls = isBot ? extractToolCalls((msg as any).blocks) : undefined;
         const toolIO = isBot ? extractToolIO(msg) : undefined;
@@ -200,12 +200,12 @@ export async function fetchConversationContext(
 
       result.thread = threadMessages;
 
-      // Check participation: did Aura reply in this thread?
+      // Check participation: did Nova reply in this thread?
       result.isAuraParticipant = threadMessages.some(
         (m) => m.isBot && m.ts !== threadTs,
       );
 
-      // Check if the parent message (first in the array) is Aura's
+      // Check if the parent message (first in the array) is Nova's
       if (threadMessages.length > 0 && threadMessages[0].isBot) {
         result.isAuraThread = true;
       }
@@ -225,7 +225,7 @@ export async function fetchConversationContext(
       const userId = msg.user || msg.bot_id || "unknown";
       const isBot = msg.user === botUserId;
       const { name: displayName } = isBot
-        ? { name: "Aura" }
+        ? { name: "Nova" }
         : await resolveDisplayName(client, userId);
       const toolCalls = isBot ? extractToolCalls((msg as any).blocks) : undefined;
       const toolIO = isBot ? extractToolIO(msg) : undefined;
@@ -240,7 +240,7 @@ export async function fetchConversationContext(
         ...(toolIO?.length && { toolIO }),
       });
 
-      // Check if Aura posted in the channel within the last hour
+      // Check if Nova posted in the channel within the last hour
       if (isBot && msg.ts && parseFloat(msg.ts) > oneHourAgo) {
         result.auraRecentlyActive = true;
       }

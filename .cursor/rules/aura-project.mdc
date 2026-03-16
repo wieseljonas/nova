@@ -1,9 +1,21 @@
 ---
-description: Core conventions for the Aura project -- deployment, env vars, Slack app, and coding patterns.
+description: Core conventions for the Nova project -- deployment, env vars, Slack app, and coding patterns.
 alwaysApply: true
 ---
 
-# Aura Project Conventions
+# Nova Project Conventions
+
+## Monorepo Structure
+
+This is a **pnpm workspace monorepo**. Always use `pnpm` (not npm/yarn).
+
+- `packages/db/` — shared `@aura/db` package (Drizzle schema, migrations, config)
+- `apps/api/` — Hono API on Vercel (Slack bot, cron jobs, AI tools)
+- `apps/dashboard/` — Next.js admin dashboard
+- `apps/web/` — marketing site / blog
+- `content/` — blog posts and Mintlify docs
+
+**Import schema via `@aura/db/schema`** in both apps. Never copy schema files.
 
 ## Monorepo Structure
 
@@ -70,7 +82,7 @@ Before building anything, **read the platform's documentation and search for exi
 
 ## Slack App
 
-- **Slack app name**: Aura
+- **Slack app name**: Nova
 - **Bot token env var**: `SLACK_BOT_TOKEN` (xoxb-...)
 - **User token env var**: `SLACK_USER_TOKEN` (xoxp-...) -- for message search
 - **Admin user IDs**: `AURA_ADMIN_USER_IDS` (comma-separated)

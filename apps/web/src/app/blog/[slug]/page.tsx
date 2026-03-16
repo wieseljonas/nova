@@ -6,7 +6,6 @@ import {
   getAllSlugs,
   getPostBySlug,
   getRelatedPosts,
-  type BlogPostMeta,
 } from "@/lib/blog";
 import { renderMdx } from "@/lib/mdx";
 
@@ -126,7 +125,7 @@ export default async function BlogPostPage({ params }: Props) {
             Related posts
           </h2>
           <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
-            {related.map((r: BlogPostMeta) => (
+            {related.map((r) => (
               <Link
                 key={r.slug}
                 href={`/blog/${r.slug}`}

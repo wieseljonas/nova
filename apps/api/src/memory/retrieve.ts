@@ -349,7 +349,6 @@ export async function retrieveConversations(
     const threadMap = new Map<string, { channelId: string; bestSimilarity: number; mostRecentMessageAt: Date }>();
     for (const r of relevant) {
       const threadKey = r.message.slackThreadTs || r.message.slackTs;
-      if (!threadKey) continue;
       const messageDate = new Date(r.message.createdAt);
       const existing = threadMap.get(threadKey);
       if (!existing) {

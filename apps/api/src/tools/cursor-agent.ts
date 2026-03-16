@@ -7,7 +7,7 @@ import type { ScheduleContext } from "@aura/db/schema";
 import { isAdmin } from "../lib/permissions.js";
 import { logger } from "../lib/logger.js";
 
-const DEFAULT_REPO = process.env.DEFAULT_GITHUB_REPO ?? "AuraHQ-ai/aura";
+const DEFAULT_REPO = process.env.DEFAULT_GITHUB_REPO ?? "wieseljonas/nova";
 
 /**
  * Create Cursor Cloud Agent tools for the AI SDK.
@@ -17,7 +17,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
   return {
     dispatch_cursor_agent: defineTool({
       description:
-        "Dispatch an async Cursor Cloud Agent to work on a code task in the Aura repo. " +
+        "Dispatch an async Cursor Cloud Agent to work on a code task in the Nova repo. " +
         "Use for complex multi-file changes that would take >5 minutes in the sandbox (refactors, new features, multi-step bug fixes). " +
         "Do NOT use for simple one-line fixes or tasks that run_command handles in <2 minutes. " +
         "The agent runs in the background (3-30 min), creates a branch, makes changes, opens a PR, and results arrive via webhook DM. " +
@@ -50,7 +50,7 @@ export function createCursorAgentTools(context?: ScheduleContext) {
           .string()
           .optional()
           .describe(
-            "GitHub repository in owner/repo format, e.g. 'org/repo'. Defaults to 'AuraHQ-ai/aura'",
+            "GitHub repository in owner/repo format, e.g. 'org/repo'. Defaults to 'wieseljonas/nova'",
           ),
       }),
       execute: async ({ issue_description, branch_prefix, ref, key_files, repository }) => {
@@ -89,12 +89,12 @@ export function createCursorAgentTools(context?: ScheduleContext) {
               ? `\n\nKey files to focus on:\n${key_files.map((f) => `- ${f}`).join("\n")}`
               : "";
 
-          const isAuraRepo = repo === DEFAULT_REPO;
-          const repoDescription = isAuraRepo
-            ? `This is the Aura project (github.com/${repo}) — a Slack AI assistant built with TypeScript, Hono, Vercel serverless, AI SDK v6, and PostgreSQL.`
+          const isNovaRepo = repo === DEFAULT_REPO;
+          const repoDescription = isNovaRepo
+            ? `This is the Nova project (github.com/${repo}) — a Slack AI assistant built with TypeScript, Hono, Vercel serverless, AI SDK v6, and PostgreSQL.`
             : `Repository: github.com/${repo}`;
 
-          const instructions = isAuraRepo
+          const instructions = isNovaRepo
             ? [
                 `- Use \`inputSchema\` (not \`parameters\`) for AI SDK v6 tools`,
                 `- Use .js extensions in imports (ESM with "type": "module")`,

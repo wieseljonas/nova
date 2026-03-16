@@ -252,7 +252,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
     }
 
     // Set assistant thread status — triggers the shimmer animation on
-    // Aura's name and shows a loading indicator while processing.
+    // Nova's name and shows a loading indicator while processing.
     // Requires the `assistant:write` scope (enabled via Agents & AI Apps
     // toggle in Slack app settings). Status auto-clears on reply.
     try {
@@ -676,7 +676,6 @@ async function persistInterruptedResponse(params: {
   // 1. Store assistant message
   const assistantTs = `${context.messageTs}-aura`;
   await storeMessage({
-    externalId: assistantTs,
     slackTs: assistantTs,
     slackThreadTs: context.threadTs || context.messageTs,
     channelId: context.channelId,
@@ -731,7 +730,6 @@ async function persistInterruptedResponse(params: {
 async function storeUserMessage(context: MessageContext, event: SlackEvent): Promise<void> {
   try {
     await storeMessage({
-      externalId: context.messageTs,
       slackTs: context.messageTs,
       slackThreadTs: context.threadTs,
       channelId: context.channelId,
@@ -780,7 +778,6 @@ async function runBackgroundTasks(params: {
   try {
     // Store the user's message
     const userMessageId = await storeMessage({
-      externalId: context.messageTs,
       slackTs: context.messageTs,
       slackThreadTs: context.threadTs,
       channelId: context.channelId,
@@ -791,10 +788,9 @@ async function runBackgroundTasks(params: {
       metadata: buildMessageMetadata(event),
     });
 
-    // Store Aura's response with a pseudo-timestamp
+    // Store Nova's response with a pseudo-timestamp
     const assistantTs = `${context.messageTs}-aura`;
     await storeMessage({
-      externalId: assistantTs,
       slackTs: assistantTs,
       slackThreadTs: context.threadTs || context.messageTs,
       channelId: context.channelId,

@@ -73,8 +73,8 @@ const SCOPES = [
 
 const EMAIL_SIGNATURE_HTML = `
 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e0e0e0; font-family: Arial, sans-serif; font-size: 13px; color: #666;">
-  <strong style="color: #333;">Aura</strong> &middot; AI Team Member<br/>
-  <a href="${process.env.AURA_WEBSITE_URL || ''}" style="color: #0066cc; text-decoration: none;">${process.env.COMPANY_NAME || 'Aura'}</a>
+  <strong style="color: #333;">Nova</strong> &middot; AI Team Member<br/>
+  <a href="${process.env.AURA_WEBSITE_URL || ''}" style="color: #0066cc; text-decoration: none;">${process.env.COMPANY_NAME || 'Nova'}</a>
 </div>`.trim();
 
 const EMAIL_SIGNATURE_TEXT = `\n--\nAura · AI Team Member\n${process.env.COMPANY_NAME || ''} · ${process.env.AURA_WEBSITE_URL || ''}`.trimEnd();
@@ -110,7 +110,7 @@ async function createBaseOAuth2Client() {
 
 /**
  * Get an authenticated OAuth2Client for a given user.
- * No args = Aura's own token (U0AFEC1C69F). Pass a userId for per-user tokens.
+ * No args = Nova's own token (U0AFEC1C69F). Pass a userId for per-user tokens.
  */
 export async function getOAuth2Client(userId?: string) {
   const resolvedUserId = userId || process.env.AURA_BOT_USER_ID || "aura";
@@ -125,7 +125,7 @@ export async function getOAuth2Client(userId?: string) {
 }
 
 /**
- * Returns an authenticated Gmail client for Aura, or null if credentials are missing.
+ * Returns an authenticated Gmail client for Nova, or null if credentials are missing.
  */
 export async function getGmailClient() {
   const auth = await getOAuth2Client();
@@ -199,7 +199,7 @@ function buildMimeMessage(
 ): string {
   const auraEmail =
     process.env.AURA_EMAIL_ADDRESS || "";
-  const fromHeader = overrides?.from || `Aura <${auraEmail}>`;
+  const fromHeader = overrides?.from || `Nova <${auraEmail}>`;
   const includeSignature = overrides?.includeSignature !== false;
   const altBoundary = `boundary_alt_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   const htmlBody = includeSignature
@@ -403,7 +403,7 @@ function extractAttachments(
 // ── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Send an email as a specific user (or Aura by default).
+ * Send an email as a specific user (or Nova by default).
  * When userId is provided, uses getGmailClientForUser(); otherwise falls back to getGmailClient().
  */
 export async function sendEmail(
@@ -462,7 +462,7 @@ export async function sendEmail(
   };
 }
 
-// ── Shared helpers (DRY: used by both Aura and user-facing functions) ───────
+// ── Shared helpers (DRY: used by both Nova and user-facing functions) ───────
 
 async function listEmailsWithClient(
   gmailClient: any,
@@ -712,7 +712,7 @@ export interface DraftSummary {
 
 /**
  * Get a refresh token for a specific Slack user from the oauth_tokens table.
- * Returns null if the user has not authorized Aura.
+ * Returns null if the user has not authorized Nova.
  */
 export async function getUserRefreshToken(
   userId: string,

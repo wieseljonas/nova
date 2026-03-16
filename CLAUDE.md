@@ -1,7 +1,16 @@
-# Aura - AI Agent for RealAdvisor
+# Nova - AI Agent for RealAdvisor
 
 ## What this is
-Aura is an autonomous AI agent that operates as a team member inside RealAdvisor's Slack workspace. It handles bug triage, data analysis, team coordination, and self-improvement.
+Nova is an autonomous AI agent that operates as a team member inside RealAdvisor's Slack workspace. It handles bug triage, data analysis, team coordination, and self-improvement.
+
+## Monorepo structure
+This is a pnpm workspace monorepo. Run `pnpm install` at the root.
+
+- `packages/db/` — shared database package (`@aura/db`): Drizzle schema, migrations, migration runner
+- `apps/api/` — Hono API deployed on Vercel (Slack bot, cron jobs, tools)
+- `apps/dashboard/` — Next.js admin dashboard
+- `apps/web/` — marketing site / blog
+- `content/` — blog posts and Mintlify documentation
 
 ## Monorepo structure
 This is a pnpm workspace monorepo. Run `pnpm install` at the root.

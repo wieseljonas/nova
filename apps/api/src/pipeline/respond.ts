@@ -6,7 +6,7 @@ import { logError } from "../lib/error-logger.js";
 import { formatForSlack, prettifyAndWrapTable } from "../lib/format.js";
 import { TABLE_BLOCK_KEY } from "../tools/table.js";
 import { safePostMessage, isChannelTypeNotSupported, isInvalidBlocks, isMsgTooLong } from "../lib/slack-messaging.js";
-import { getSlackMeta } from "../lib/tool.js";
+import { getSlackMeta, getToolDescription, executionContext } from "../lib/tool.js";
 import { createInteractiveAgent } from "../lib/agents.js";
 import { getMainModel, buildCachedSystemMessages } from "../lib/ai.js";
 import { InvocationSupersededError } from "./prepare-step.js";
@@ -118,6 +118,7 @@ function truncate(s: string | undefined, max: number): string | undefined {
   if (!s) return undefined;
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
 }
+
 
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -557,6 +558,9 @@ export async function generateResponse(
 
     const result = await agent.stream(streamCallOptions as any);
 
+    // Track tool call inputs so result/error handlers can resolve dynamic status
+    const toolCallInputs = new Map<string, Record<string, unknown>>();
+
     for await (const chunk of result.fullStream) {
       resetTimer();
 
@@ -642,8 +646,9 @@ export async function generateResponse(
           }
 
           const slackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = slackMeta?.status ?? "Working on it...";
           const inputArgs = (chunk as any).input ?? {};
+          toolCallInputs.set(chunk.toolCallId, inputArgs);
+          const title = (typeof slackMeta?.status === "function" ? await slackMeta.status(inputArgs) : slackMeta?.status) ?? "Working on it...";
           const details = slackMeta?.detail?.(inputArgs);
           const toolCallPayload = {
             chunks: [{
@@ -687,7 +692,7 @@ export async function generateResponse(
 
         case "tool-result": {
           const resultSlackMeta = getSlackMeta(tools[chunk.toolName]);
-          const title = resultSlackMeta?.status ?? "Done";
+          const title = (typeof resultSlackMeta?.status === "function" ? await resultSlackMeta.status(toolCallInputs.get(chunk.toolCallId) ?? {}) : resultSlackMeta?.status) ?? "Done";
           const output = chunk.output;
           const isError = output && typeof output === "object" &&
             "ok" in output && output.ok === false;
@@ -749,7 +754,7 @@ export async function generateResponse(
           const errToolName = (chunk as any).toolName;
           const errToolCallId = (chunk as any).toolCallId;
           const errSlackMeta = getSlackMeta(tools[errToolName]);
-          const title = errSlackMeta?.status ?? "Failed";
+          const title = (typeof errSlackMeta?.status === "function" ? await errSlackMeta.status(toolCallInputs.get(errToolCallId) ?? {}) : errSlackMeta?.status) ?? "Failed";
           const err = (chunk as any).error;
           const errorMsg = err instanceof Error ? err.message : String(err);
           const toolErrorPayload = {
@@ -789,6 +794,7 @@ export async function generateResponse(
           }
           break;
         }
+
       }
     }
 

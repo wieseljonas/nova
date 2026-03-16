@@ -30,7 +30,7 @@
     },
     {
       "path": "/api/cron/heartbeat",
-      "schedule": "*/30 * * * *"
+      "schedule": "*/10 * * * *"
     }
   ]
 }
