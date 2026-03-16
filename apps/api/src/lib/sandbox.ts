@@ -128,6 +128,13 @@ async function setupSandboxFilesystem(
       return;
     }
 
+    // Validate bucket name to prevent shell injection
+    // GCS bucket names can only contain lowercase letters, numbers, hyphens, underscores, and dots
+    if (!/^[a-z0-9._-]+$/.test(bucketName)) {
+      logger.warn("Skipping GCS mount — invalid bucket name format", { bucketName });
+      return;
+    }
+
     const mountCheck = await sandbox.commands.run(
       `mountpoint -q ${mountPath} && echo mounted || echo not`,
       { timeoutMs: 5_000, envs },
