@@ -15,6 +15,7 @@ import { formatDate } from "@/lib/utils";
 import { createCredential } from "./actions";
 import { AuthSecretFields } from "./credential-secret-fields";
 import type { AuthScheme, SecretPayloadInput } from "./credential-secret";
+import { Combobox } from "@/components/ui/combobox";
 import { Plus, Search } from "lucide-react";
 
 interface CredentialRow {
@@ -40,17 +41,19 @@ interface Props {
   total: number;
   page: number;
   pageSize: number;
+  knownUsers: Array<{ value: string; label: string }>;
+  currentUserId: string;
   initialFilters: CredentialFilters;
 }
 
-export function CredentialsTable({ credentials, total, page, pageSize, initialFilters }: Props) {
+export function CredentialsTable({ credentials, total, page, pageSize, knownUsers, currentUserId, initialFilters }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newAuthScheme, setNewAuthScheme] = useState<AuthScheme>("bearer");
-  const [newOwnerUserId, setNewOwnerUserId] = useState("");
+  const [newOwnerUserId, setNewOwnerUserId] = useState(currentUserId);
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newApprovalChannel, setNewApprovalChannel] = useState("");
@@ -140,7 +143,7 @@ export function CredentialsTable({ credentials, total, page, pageSize, initialFi
       setShowCreate(false);
       setNewKey("");
       setNewAuthScheme("bearer");
-      setNewOwnerUserId("");
+      setNewOwnerUserId(currentUserId);
       setNewDisplayName("");
       setNewDescription("");
       setNewApprovalChannel("");
@@ -290,7 +293,12 @@ export function CredentialsTable({ credentials, total, page, pageSize, initialFi
             <option value="oauth_client">OAuth Client</option>
             <option value="google_service_account">Google Service Account</option>
           </Select>
-          <Input placeholder="Owner Slack User ID" value={newOwnerUserId} onChange={(e) => setNewOwnerUserId(e.target.value)} />
+          <Combobox
+            options={knownUsers}
+            value={newOwnerUserId}
+            onChange={setNewOwnerUserId}
+            placeholder="Owner Slack User ID"
+          />
           <AuthSecretFields authScheme={newAuthScheme} secret={newSecret} setSecret={setNewSecret} />
           {createError ? <p className="text-sm text-destructive">{createError}</p> : null}
           <div className="flex justify-end gap-2">

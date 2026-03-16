@@ -604,6 +604,22 @@ export async function updateCredentialMetadata(data: {
   revalidatePath(`/credentials/${credentialId}`);
 }
 
+export async function getKnownUsers() {
+  const users = await db
+    .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
+    .from(userProfiles)
+    .orderBy(desc(userProfiles.interactionCount))
+    .limit(200);
+
+  return users.map((user) => ({
+    value: user.slackUserId,
+    label:
+      user.displayName && user.displayName !== user.slackUserId
+        ? `${user.displayName} (${user.slackUserId})`
+        : user.slackUserId,
+  }));
+}
+
 export async function deleteCredential(data: { credentialId: string; actorUserId: string }) {
   const credentialId = requireText(data.credentialId, "Credential ID");
   const actorUserId = requireText(data.actorUserId, "Acting user ID");
