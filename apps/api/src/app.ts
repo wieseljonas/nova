@@ -35,7 +35,7 @@ import { logger } from "./lib/logger.js";
 import { recordError } from "./lib/metrics.js";
 import { safePostMessage } from "./lib/slack-messaging.js";
 import crypto from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
 import { notes, feedback } from "@aura/db/schema";
 
@@ -710,12 +710,17 @@ app.post("/api/slack/interactions", async (c) => {
             // Authorization check: look up credential live to determine approvers
             let isAuthorized = isAdmin(userId);
             
-            if (!isAuthorized && approval.credentialKey) {
+            if (!isAuthorized && approval.credentialKey && approval.credentialOwner) {
               const { credentials } = await import("@aura/db/schema");
               const credRows = await db
                 .select()
                 .from(credentials)
-                .where(eq(credentials.key, approval.credentialKey))
+                .where(
+                  and(
+                    eq(credentials.key, approval.credentialKey),
+                    eq(credentials.ownerUserId, approval.credentialOwner)
+                  )
+                )
                 .limit(1);
               
               const credential = credRows[0];
@@ -908,12 +913,17 @@ app.post("/api/slack/interactions", async (c) => {
             // Authorization check: look up credential live to determine approvers
             let isAuthorized = isAdmin(userId);
             
-            if (!isAuthorized && approval.credentialKey) {
+            if (!isAuthorized && approval.credentialKey && approval.credentialOwner) {
               const { credentials } = await import("@aura/db/schema");
               const credRows = await db
                 .select()
                 .from(credentials)
-                .where(eq(credentials.key, approval.credentialKey))
+                .where(
+                  and(
+                    eq(credentials.key, approval.credentialKey),
+                    eq(credentials.ownerUserId, approval.credentialOwner)
+                  )
+                )
                 .limit(1);
               
               const credential = credRows[0];

@@ -386,6 +386,13 @@
       "when": 1774262400000,
       "tag": "0054_credential_live_authorization",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1774348800000,
+      "tag": "0055_restore_credential_owner",
+      "breakpoints": false
     }
   ]
 }

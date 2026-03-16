@@ -693,6 +693,7 @@ export const approvals = pgTable(
     description: text("description"),
     status: text("status").notNull().default("pending"),
     credentialKey: text("credential_key"),
+    credentialOwner: text("credential_owner"),
     urlPattern: text("url_pattern"),
     httpMethod: text("http_method"),
     totalItems: integer("total_items").notNull().default(1),

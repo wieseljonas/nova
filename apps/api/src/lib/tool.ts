@@ -151,6 +151,7 @@ export function defineTool<TInput, TOutput>(config: {
             title: summary.title,
             description: summary.description,
             credentialKey: credentialName,
+            credentialOwner,
             items: [{
               method,
               url,
