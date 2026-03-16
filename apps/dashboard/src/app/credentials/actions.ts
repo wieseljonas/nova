@@ -241,10 +241,14 @@ export async function getCredential(id: string) {
     }
   }
 
-  const access = [
-    ...writerIds.map((userId) => ({ userId, permission: "write" as const })),
-    ...readerIds.map((userId) => ({ userId, permission: "read" as const })),
-  ];
+  const accessMap = new Map<string, "read" | "write">();
+  for (const userId of readerIds) {
+    accessMap.set(userId, "read");
+  }
+  for (const userId of writerIds) {
+    accessMap.set(userId, "write");
+  }
+  const access = Array.from(accessMap.entries()).map(([userId, permission]) => ({ userId, permission }));
 
   const auditLog = await db
     .select()
@@ -267,7 +271,10 @@ export async function getCredential(id: string) {
     userNames,
     knownUsers: knownUsers.map((user) => ({
       userId: user.slackUserId,
-      label: user.displayName ?? user.slackUserId,
+      label:
+        user.displayName && user.displayName !== user.slackUserId
+          ? `${user.displayName} (${user.slackUserId})`
+          : user.slackUserId,
     })),
     auditLog,
   };
@@ -431,6 +438,55 @@ export async function revokeCredentialAccess(data: {
     credentialName: cred.key,
     accessedBy: actorUserId,
     action: "revoke",
+    context: `grantee:${granteeUserId} permission:${data.permission}`,
+  });
+
+  revalidatePath("/credentials");
+  revalidatePath(`/credentials/${credentialId}`);
+}
+
+export async function updateCredentialAccessPermission(data: {
+  credentialId: string;
+  actorUserId: string;
+  granteeUserId: string;
+  permission: "read" | "write";
+}) {
+  const credentialId = requireText(data.credentialId, "Credential ID");
+  const actorUserId = requireText(data.actorUserId, "Acting user ID");
+  const granteeUserId = requireText(data.granteeUserId, "Grantee user ID");
+
+  const cred = await getCredentialById(credentialId);
+  if (!canManage(cred, actorUserId)) {
+    throw new Error("Only the owner or a writer can edit access");
+  }
+  if (granteeUserId === cred.ownerUserId) {
+    throw new Error("Cannot edit owner access");
+  }
+
+  const readerIds = new Set((cred.readerUserIds as string[]) ?? []);
+  const writerIds = new Set((cred.writerUserIds as string[]) ?? []);
+  readerIds.delete(granteeUserId);
+  writerIds.delete(granteeUserId);
+  if (data.permission === "read") {
+    readerIds.add(granteeUserId);
+  } else {
+    writerIds.add(granteeUserId);
+  }
+
+  await db
+    .update(credentials)
+    .set({
+      readerUserIds: [...readerIds],
+      writerUserIds: [...writerIds],
+      updatedAt: new Date(),
+    })
+    .where(eq(credentials.id, credentialId));
+
+  await db.insert(credentialAuditLog).values({
+    credentialId,
+    credentialName: cred.key,
+    accessedBy: actorUserId,
+    action: "update",
     context: `grantee:${granteeUserId} permission:${data.permission}`,
   });
 

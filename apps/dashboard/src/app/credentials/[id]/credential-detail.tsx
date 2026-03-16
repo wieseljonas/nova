@@ -17,6 +17,7 @@ import {
   updateCredentialMetadata,
   grantCredentialAccess,
   revokeCredentialAccess,
+  updateCredentialAccessPermission,
   deleteCredential,
 } from "../actions";
 import { AuthSecretFields } from "../credential-secret-fields";
@@ -38,6 +39,7 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
   const router = useRouter();
   const [showUpdateValue, setShowUpdateValue] = useState(false);
   const [actorUserId, setActorUserId] = useState(data.ownerUserId);
+  const [grantSearch, setGrantSearch] = useState("");
   const [grantUserId, setGrantUserId] = useState("");
   const [grantPermission, setGrantPermission] = useState<"read" | "write">("read");
   const [metadataDisplayName, setMetadataDisplayName] = useState(data.displayName ?? "");
@@ -51,6 +53,20 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
   const [isUpdatingValue, setIsUpdatingValue] = useState(false);
   const [isGranting, setIsGranting] = useState(false);
+  const [isUpdatingAccess, setIsUpdatingAccess] = useState<string | null>(null);
+  const [permissionEdits, setPermissionEdits] = useState<Record<string, "read" | "write">>(
+    Object.fromEntries(data.access.map((item) => [item.userId, item.permission])),
+  );
+
+  const grantCandidates = data.knownUsers
+    .filter((user) => user.userId !== data.ownerUserId)
+    .filter((user) => !data.access.some((entry) => entry.userId === user.userId))
+    .filter((user) => {
+      const query = grantSearch.trim().toLowerCase();
+      if (!query) return true;
+      return user.label.toLowerCase().includes(query) || user.userId.toLowerCase().includes(query);
+    })
+    .slice(0, 8);
 
   async function handleUpdateValue() {
     setError("");
@@ -107,6 +123,26 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
       setError(err instanceof Error ? err.message : "Failed to grant access");
     } finally {
       setIsGranting(false);
+    }
+  }
+
+  async function handlePermissionUpdate(userId: string) {
+    const nextPermission = permissionEdits[userId];
+    if (!nextPermission) return;
+    setError("");
+    setIsUpdatingAccess(userId);
+    try {
+      await updateCredentialAccessPermission({
+        credentialId: data.id,
+        actorUserId,
+        granteeUserId: userId,
+        permission: nextPermission,
+      });
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update access permission");
+    } finally {
+      setIsUpdatingAccess(null);
     }
   }
 
@@ -227,10 +263,34 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
         </TabsList>
 
         <TabsContent value="access">
+          <div className="mb-3 space-y-2">
+            <Input
+              placeholder="Search users by name or Slack ID"
+              value={grantSearch}
+              onChange={(e) => setGrantSearch(e.target.value)}
+            />
+            <div className="max-h-32 overflow-y-auto rounded-md border p-2">
+              {grantCandidates.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No matching users</p>
+              ) : (
+                <div className="space-y-1">
+                  {grantCandidates.map((user) => (
+                    <button
+                      key={user.userId}
+                      type="button"
+                      className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-muted"
+                      onClick={() => setGrantUserId(user.userId)}
+                    >
+                      {user.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
           <div className="mb-3 grid grid-cols-3 gap-2">
             <Input
-              list="credential-known-users"
-              placeholder="User to grant access"
+              placeholder="Selected user Slack ID"
               value={grantUserId}
               onChange={(e) => setGrantUserId(e.target.value)}
             />
@@ -241,28 +301,44 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
             <Button onClick={handleGrant} disabled={isGranting}>
               {isGranting ? "Granting..." : "Grant Access"}
             </Button>
-            <datalist id="credential-known-users">
-              {data.knownUsers.map((user) => (
-                <option key={user.userId} value={user.userId}>
-                  {user.label}
-                </option>
-              ))}
-            </datalist>
           </div>
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>User</TableHead>
                 <TableHead>Permission</TableHead>
-                <TableHead className="w-[120px]">Action</TableHead>
+                <TableHead className="w-[220px]">Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.access.map((item) => (
                 <TableRow key={`${item.userId}-${item.permission}`}>
                   <TableCell className="text-sm">{data.userNames[item.userId] || item.userId}</TableCell>
-                  <TableCell><Badge variant="secondary">{item.permission}</Badge></TableCell>
                   <TableCell>
+                    <Badge variant="secondary">{item.permission}</Badge>
+                  </TableCell>
+                  <TableCell className="flex items-center gap-2">
+                    <Select
+                      value={permissionEdits[item.userId] ?? item.permission}
+                      onChange={(e) =>
+                        setPermissionEdits((prev) => ({
+                          ...prev,
+                          [item.userId]: e.target.value as "read" | "write",
+                        }))
+                      }
+                      className="h-8 w-24"
+                    >
+                      <option value="read">Read</option>
+                      <option value="write">Write</option>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handlePermissionUpdate(item.userId)}
+                      disabled={isUpdatingAccess === item.userId}
+                    >
+                      Save
+                    </Button>
                     <Button variant="outline" size="sm" onClick={() => handleRevoke(item.userId, item.permission)}>
                       Revoke
                     </Button>
