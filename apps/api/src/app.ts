@@ -711,24 +711,12 @@ app.post("/api/slack/interactions", async (c) => {
             let isAuthorized = isAdmin(userId);
             
             if (!isAuthorized && approval.credentialKey && approval.credentialOwner) {
-              const { credentials } = await import("@aura/db/schema");
-              const credRows = await db
-                .select()
-                .from(credentials)
-                .where(
-                  and(
-                    eq(credentials.key, approval.credentialKey),
-                    eq(credentials.ownerUserId, approval.credentialOwner)
-                  )
-                )
-                .limit(1);
+              const { getCredentialForApproval, getApprovers } = await import("./lib/approval.js");
+              const credential = await getCredentialForApproval(approval.credentialKey, approval.credentialOwner);
               
-              const credential = credRows[0];
               if (credential) {
-                const isOwner = credential.ownerUserId === userId;
-                const writerIds = (credential.writerUserIds as string[]) ?? [];
-                const isWriter = writerIds.includes(userId);
-                isAuthorized = isOwner || isWriter;
+                const approvers = getApprovers(credential);
+                isAuthorized = approvers.includes(userId);
               }
             }
 
@@ -914,24 +902,12 @@ app.post("/api/slack/interactions", async (c) => {
             let isAuthorized = isAdmin(userId);
             
             if (!isAuthorized && approval.credentialKey && approval.credentialOwner) {
-              const { credentials } = await import("@aura/db/schema");
-              const credRows = await db
-                .select()
-                .from(credentials)
-                .where(
-                  and(
-                    eq(credentials.key, approval.credentialKey),
-                    eq(credentials.ownerUserId, approval.credentialOwner)
-                  )
-                )
-                .limit(1);
+              const { getCredentialForApproval, getApprovers } = await import("./lib/approval.js");
+              const credential = await getCredentialForApproval(approval.credentialKey, approval.credentialOwner);
               
-              const credential = credRows[0];
               if (credential) {
-                const isOwner = credential.ownerUserId === userId;
-                const writerIds = (credential.writerUserIds as string[]) ?? [];
-                const isWriter = writerIds.includes(userId);
-                isAuthorized = isOwner || isWriter;
+                const approvers = getApprovers(credential);
+                isAuthorized = approvers.includes(userId);
               }
             }
 

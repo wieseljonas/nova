@@ -602,17 +602,22 @@ export async function addCredentialReader(
   }
 
   const readerIds = (cred.readerUserIds as string[]) ?? [];
+  const writerIds = (cred.writerUserIds as string[]) ?? [];
+  
   if (!readerIds.includes(granteeId)) {
     readerIds.push(granteeId);
-    
-    await db
-      .update(credentials)
-      .set({ 
-        readerUserIds: readerIds as any,
-        updatedAt: new Date()
-      })
-      .where(eq(credentials.id, credentialId));
   }
+  
+  const updatedWriterIds = writerIds.filter(id => id !== granteeId);
+    
+  await db
+    .update(credentials)
+    .set({ 
+      readerUserIds: readerIds as any,
+      writerUserIds: updatedWriterIds as any,
+      updatedAt: new Date()
+    })
+    .where(eq(credentials.id, credentialId));
 
   await audit(credentialId, cred.key, granterId, "grant", `grantee:${granteeId} permission:read`);
 }
@@ -636,18 +641,23 @@ export async function addCredentialWriter(
     throw new Error("Only the owner or a writer can grant access");
   }
 
+  const readerIds = (cred.readerUserIds as string[]) ?? [];
   const writerIds = (cred.writerUserIds as string[]) ?? [];
+  
   if (!writerIds.includes(granteeId)) {
     writerIds.push(granteeId);
-    
-    await db
-      .update(credentials)
-      .set({ 
-        writerUserIds: writerIds as any,
-        updatedAt: new Date()
-      })
-      .where(eq(credentials.id, credentialId));
   }
+  
+  const updatedReaderIds = readerIds.filter(id => id !== granteeId);
+    
+  await db
+    .update(credentials)
+    .set({ 
+      readerUserIds: updatedReaderIds as any,
+      writerUserIds: writerIds as any,
+      updatedAt: new Date()
+    })
+    .where(eq(credentials.id, credentialId));
 
   await audit(credentialId, cred.key, granterId, "grant", `grantee:${granteeId} permission:write`);
 }

@@ -648,7 +648,7 @@ export async function openShareCredentialModal(
               value: "read",
               description: {
                 type: "plain_text",
-                text: "Can use the credential value",
+                text: "Can use for GET requests only",
               },
             },
           },
