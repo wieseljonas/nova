@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { approvals, approvalItems, type Approval } from "@aura/db/schema";
 import { injectCredentialAuth, type ResolvedCredentialAuth } from "./credential-auth.js";
+import { isPrivateUrl } from "./ssrf.js";
 import { logger } from "./logger.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -291,6 +292,20 @@ export async function executeBatchProposal(args: {
       return { ok: true };
     }
 
+    if (itemRows.length !== approval.totalItems) {
+      logger.error("executeBatchProposal: item count mismatch — possible tampering", {
+        approvalId,
+        expected: approval.totalItems,
+        actual: itemRows.length,
+      });
+      await db
+        .update(approvals)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(eq(approvals.id, approvalId));
+      await updateApprovalCard(slackClient, approval, "failed", "Item count mismatch — execution aborted");
+      return { ok: false, error: `Item count mismatch: expected ${approval.totalItems}, found ${itemRows.length}` };
+    }
+
     // Get credential for requests
     const { getApiCredentialWithType } = await import("./api-credentials.js");
     let credential: ResolvedCredentialAuth | null = null;
@@ -526,6 +541,10 @@ async function executeHttpRequest(args: {
   const { method, url, body, headers, credential } = args;
 
   try {
+    if (await isPrivateUrl(url)) {
+      return { ok: false, error: `Blocked: URL resolves to a private/internal address` };
+    }
+
     const injected = injectCredentialAuth(url, headers, credential);
     const requestHeaders = injected.headers;
     const requestUrl = injected.url;
