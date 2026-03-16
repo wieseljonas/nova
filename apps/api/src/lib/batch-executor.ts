@@ -100,6 +100,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         totalItems: items.length,
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
+        requestedInThread: requestedInThread ?? null,
       })
       .returning({ id: approvals.id });
 
@@ -431,6 +432,63 @@ export async function executeBatchProposal(args: {
       completed,
       failed,
     });
+
+    // ── Post results back to the original conversation thread ──────────────
+    // This enables continuation: the LLM sees results in thread context on next wake.
+    if (approval.requestedInChannel && approval.requestedInThread) {
+      try {
+        // Load completed item results
+        const completedItemRows = await db
+          .select()
+          .from(approvalItems)
+          .where(eq(approvalItems.approvalId, approvalId))
+          .orderBy(approvalItems.sequenceNum);
+
+        // Build a concise summary of results
+        const resultParts: string[] = [];
+        for (const item of completedItemRows) {
+          if (item.status === "succeeded" && item.responseBody) {
+            // Truncate large responses to keep the thread reply readable
+            const bodyStr = typeof item.responseBody === "string"
+              ? item.responseBody
+              : JSON.stringify(item.responseBody);
+            const truncated = bodyStr.length > 4000
+              ? bodyStr.slice(0, 4000) + "\n... (truncated)"
+              : bodyStr;
+            resultParts.push(`*Item ${item.sequenceNum}* (${item.method} ${item.responseStatus}):${"\n"}\`\`\`${truncated}\`\`\``);
+          } else if (item.status === "failed") {
+            resultParts.push(`*Item ${item.sequenceNum}* :x: ${item.error ?? "Unknown error"}`);
+          }
+        }
+
+        const summaryHeader = failed > 0
+          ? `:warning: ${approval.title ?? "Batch"} — Completed with ${failed} failure${failed > 1 ? "s" : ""}`
+          : `:white_check_mark: ${approval.title ?? "Batch"} — Completed successfully`;
+
+        const fullMessage = resultParts.length > 0
+          ? `${summaryHeader}\n\n${resultParts.join("\n\n")}`
+          : summaryHeader;
+
+        // Post as thread reply to the original conversation
+        await slackClient.chat.postMessage({
+          channel: approval.requestedInChannel,
+          thread_ts: approval.requestedInThread,
+          text: fullMessage,
+        });
+
+        logger.info("Posted execution results to original thread", {
+          approvalId,
+          channel: approval.requestedInChannel,
+          thread: approval.requestedInThread,
+        });
+      } catch (replyErr) {
+        // Non-critical: log but don't fail the batch
+        logger.warn("Failed to post results to original thread", {
+          approvalId,
+          error: replyErr instanceof Error ? replyErr.message : String(replyErr),
+        });
+      }
+    }
 
     return { ok: true };
   } catch (err) {
