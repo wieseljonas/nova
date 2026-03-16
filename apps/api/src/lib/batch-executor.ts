@@ -1,9 +1,8 @@
 import { WebClient } from "@slack/web-api";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { approvals, approvalItems, approvalPolicies, type Approval, type ApprovalItem } from "@aura/db/schema";
+import { approvals, approvalItems, type Approval, type ApprovalItem } from "@aura/db/schema";
 import { logger } from "./logger.js";
-import { lookupPolicy, effectiveRiskTier } from "./approval.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,6 +22,7 @@ export interface CreateProposalArgs {
   requestedBy: string;
   requestedInChannel?: string;
   requestedInThread?: string;
+  approverIds?: string[];
   slackClient?: WebClient;
 }
 
@@ -49,7 +49,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   approvalId?: string;
   error?: string;
 }> {
-  const { title, description, credentialName, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
+  const { title, description, credentialName, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, approverIds: passedApproverIds, slackClient: injectedSlackClient } = args;
 
   if (items.length === 0) {
     return { ok: false, error: "No items to approve" };
@@ -58,22 +58,15 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   const slackClient = injectedSlackClient ?? new WebClient(process.env.SLACK_BOT_TOKEN);
 
   try {
-    // Determine URL pattern and method from first item (for policy lookup)
+    // Determine URL pattern and method from first item
     const firstItem = items[0];
     const method = firstItem.method.toUpperCase();
     const url = firstItem.url;
 
-    // Look up approval policy
-    const policy = await lookupPolicy({
-      toolName: "http_request",
-      url,
-      method,
-      credentialName,
-    });
-
-    const approvalMode = policy?.approvalMode ?? "any_one";
-    const approverIds = policy?.approverIds ?? [];
-    const requiredApprovals = approvalMode === "all_must" ? (approverIds.length > 0 ? approverIds.length : 1) : 1;
+    // Use passed approverIds (from credential) or default to empty
+    const approverIds = passedApproverIds ?? [];
+    const approvalMode = "any_one"; // Hardcoded: any approver can approve
+    const requiredApprovals = 1; // any_one mode always requires 1 approval
 
     // Create approval record
     const [approval] = await db
@@ -86,7 +79,6 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         urlPattern: url.split("?")[0], // Strip query params for pattern
         httpMethod: method,
         totalItems: items.length,
-        policyId: policy?.id ?? null,
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
         approvalMode,

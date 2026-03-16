@@ -3,7 +3,7 @@ import { tool, type Tool } from "ai";
 import { eq } from "drizzle-orm";
 import type { ZodType } from "zod";
 import { db } from "../db/client.js";
-import { lookupPolicy, effectiveRiskTier, type ApprovalPolicy } from "./approval.js";
+import { checkAccess, getApprovers, getApprovalChannel, getCredentialForApproval } from "./approval.js";
 import { logger } from "./logger.js";
 import { generateProposalSummary } from "./proposal-summary.js";
 
@@ -105,34 +105,29 @@ export function defineTool<TInput, TOutput>(config: {
         const credentialName = httpInput.credential_name as string | undefined;
         const method = (httpInput.method as string | undefined) ?? "GET";
         const url = httpInput.url as string | undefined ?? "";
-
-        // Check credential-level allowed methods
         const credentialOwner = httpInput.credential_owner as string | undefined ?? ctx.triggeredBy;
-        if (credentialName && credentialOwner) {
-          const { getCredentialMethods } = await import("./api-credentials.js");
-          const allowedMethods = await getCredentialMethods(credentialName, credentialOwner);
-          if (allowedMethods && allowedMethods.length > 0) {
-            const methodUpper = method.toUpperCase();
-            if (allowedMethods.map(m => m.toUpperCase()).includes(methodUpper)) {
-              // Method is in the allowed list, skip approval
-              return originalExecute(input);
-            }
+
+        // If no credential, default to auto-approve for GET, require approval otherwise
+        if (!credentialName || !credentialOwner) {
+          if (method.toUpperCase() === "GET" || method.toUpperCase() === "HEAD" || method.toUpperCase() === "OPTIONS") {
+            return originalExecute(input);
+          } else {
+            throw new Error("Write requests require a credential for governance");
           }
         }
 
-        const policy = await lookupPolicy({
-          toolName,
-          url,
-          method,
-          credentialName,
-        });
+        // Look up credential
+        const credential = await getCredentialForApproval(credentialName, credentialOwner);
+        if (!credential) {
+          throw new Error(`Credential "${credentialName}" not found`);
+        }
 
-        const { effectiveAction } = await import("./approval.js");
-        const action = effectiveAction(policy, method);
+        // Check access
+        const action = checkAccess(credential, ctx.triggeredBy, method);
 
         // Handle deny action
-        if (action === "deny") {
-          throw new Error(`Action denied by governance policy: ${policy?.name ?? "default"}`);
+        if (action === "denied") {
+          throw new Error(`Access denied: you don't have permission to use credential "${credentialName}"`);
         }
 
         // Handle auto-approve action
@@ -151,6 +146,10 @@ export function defineTool<TInput, TOutput>(config: {
             itemCount: 1,
             reason: httpInput.reason as string | undefined,
           });
+          
+          const approvers = getApprovers(credential);
+          const approvalChannel = getApprovalChannel(credential);
+          
           const result = await createProposal({
             title: summary.title,
             description: summary.description,
@@ -163,8 +162,9 @@ export function defineTool<TInput, TOutput>(config: {
               headers: httpInput.headers as Record<string, string> | undefined,
             }],
             requestedBy: ctx.triggeredBy,
-            requestedInChannel: ctx.channelId,
+            requestedInChannel: approvalChannel ?? ctx.channelId,
             requestedInThread: ctx.threadTs,
+            approverIds: approvers,
           });
 
           if (!result.ok) {
