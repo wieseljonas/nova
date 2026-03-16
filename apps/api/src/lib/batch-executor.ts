@@ -67,6 +67,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     let approvalChannel: string | null = null;
     if (credentialKey && credentialOwner) {
       const { credentials } = await import("@aura/db/schema");
+      const { getApprovers, getApprovalChannel } = await import("./approval.js");
       const { and, eq } = await import("drizzle-orm");
       const credRows = await db
         .select()
@@ -81,9 +82,8 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
       
       const credential = credRows[0];
       if (credential) {
-        const writerIds = (credential.writerUserIds as string[]) ?? [];
-        approverIds = [credential.ownerUserId, ...writerIds];
-        approvalChannel = credential.approvalSlackChannelId ?? null;
+        approverIds = getApprovers(credential);
+        approvalChannel = getApprovalChannel(credential);
       }
     }
 
@@ -102,7 +102,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         httpMethod: method,
         totalItems: items.length,
         requestedBy,
-        requestedInChannel: approvalChannel ?? requestedInChannel ?? null,
+        requestedInChannel: requestedInChannel ?? null,
         approvalMode,
         requiredApprovals,
       })
