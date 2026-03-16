@@ -170,8 +170,13 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
 
   async function handleDelete() {
     if (!confirm("Delete this credential?")) return;
-    await deleteCredential({ credentialId: data.id, actorUserId });
-    router.push("/credentials");
+    setError("");
+    try {
+      await deleteCredential({ credentialId: data.id, actorUserId });
+      router.push("/credentials");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete credential");
+    }
   }
 
   return (

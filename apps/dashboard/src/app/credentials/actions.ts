@@ -408,6 +408,8 @@ export async function grantCredentialAccess(data: {
 
   const readerIds = new Set((cred.readerUserIds as string[]) ?? []);
   const writerIds = new Set((cred.writerUserIds as string[]) ?? []);
+  readerIds.delete(granteeUserId);
+  writerIds.delete(granteeUserId);
 
   if (data.permission === "read") {
     readerIds.add(granteeUserId);
