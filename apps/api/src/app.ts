@@ -34,10 +34,12 @@ import { setSetting } from "./lib/settings.js";
 import { logger } from "./lib/logger.js";
 import { recordError } from "./lib/metrics.js";
 import { safePostMessage } from "./lib/slack-messaging.js";
+import { executeBatchProposal } from "./lib/batch-executor.js";
+import { isAuthorizedApprover } from "./lib/approval.js";
 import crypto from "node:crypto";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
-import { notes, feedback } from "@aura/db/schema";
+import { approvals, notes, feedback } from "@aura/db/schema";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -364,6 +366,72 @@ function extractCredentialValue(
   return undefined;
 }
 
+async function postEphemeralIfChannel(
+  slackClient: WebClient,
+  channelId: string | undefined,
+  userId: string,
+  text: string,
+): Promise<void> {
+  if (!channelId) return;
+  await slackClient.chat.postEphemeral({
+    channel: channelId,
+    user: userId,
+    text,
+  });
+}
+
+async function loadAuthorizedPendingApproval(args: {
+  approvalId: string;
+  userId: string;
+  channelId?: string;
+  slackClient: WebClient;
+  unauthorizedText: string;
+}): Promise<(typeof approvals.$inferSelect) | null> {
+  const { approvalId, userId, channelId, slackClient, unauthorizedText } = args;
+
+  const approvalRows = await db
+    .select()
+    .from(approvals)
+    .where(eq(approvals.id, approvalId))
+    .limit(1);
+
+  const approval = approvalRows[0];
+  if (!approval) {
+    logger.error("Approval not found", { approvalId });
+    return null;
+  }
+
+  if (approval.status !== "pending") {
+    logger.warn("Approval is not pending", { approvalId, status: approval.status, userId });
+    await postEphemeralIfChannel(
+      slackClient,
+      channelId,
+      userId,
+      `This approval has already been ${approval.status}.`,
+    );
+    return null;
+  }
+
+  const credentialAuth = await isAuthorizedApprover(
+    approval.credentialKey,
+    approval.credentialOwner,
+    userId,
+  );
+  const authorized = isAdmin(userId) || credentialAuth;
+
+  if (!authorized) {
+    logger.warn("Unauthorized approval action", {
+      approvalId,
+      userId,
+      credentialKey: approval.credentialKey,
+    });
+    await postEphemeralIfChannel(slackClient, channelId, userId, unauthorizedText);
+    return null;
+  }
+
+  return approval;
+}
+
 // ── Slack Interactions Endpoint ─────────────────────────────────────────────
 
 app.post("/api/slack/interactions", async (c) => {
@@ -675,63 +743,16 @@ app.post("/api/slack/interactions", async (c) => {
 
         const approvePromise = (async () => {
           try {
-            const { approvals, jobs } = await import("@aura/db/schema");
-            const { eq, sql } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-            const { isAdmin } = await import("./lib/permissions.js");
+            const channelId = payload.channel?.id;
+            const approval = await loadAuthorizedPendingApproval({
+              approvalId,
+              userId,
+              channelId,
+              slackClient,
+              unauthorizedText: "You're not authorized to approve this.",
+            });
+            if (!approval) return;
 
-            // First, fetch the current approval to check authorization and state
-            const approvalRows = await db
-              .select()
-              .from(approvals)
-              .where(eq(approvals.id, approvalId))
-              .limit(1);
-
-            const approval = approvalRows[0];
-            if (!approval) {
-              logger.error("Approval not found", { approvalId });
-              return;
-            }
-
-            // Check if approval is still pending
-            if (approval.status !== "pending") {
-              logger.warn("Approval is not pending", { approvalId, status: approval.status, userId });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: `This approval has already been ${approval.status}.`,
-                });
-              }
-              return;
-            }
-
-            // Authorization check: look up credential live to determine approvers
-            const { isAuthorizedApprover } = await import("./lib/approval.js");
-            const credentialAuth = await isAuthorizedApprover(
-              approval.credentialKey,
-              approval.credentialOwner,
-              userId
-            );
-            const isAuthorized = isAdmin(userId) || credentialAuth;
-
-            if (!isAuthorized) {
-              logger.warn("Unauthorized approval attempt", { approvalId, userId, credentialKey: approval.credentialKey });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: "You're not authorized to approve this.",
-                });
-              }
-              return;
-            }
-
-            // BUG FIX 2: Implement all_must approval mode logic
-            const approvalMode = approval.approvalMode ?? "any_one";
-            const requiredApprovals = approval.requiredApprovals ?? 1;
             const currentApprovedBy = approval.approvedBy ?? [];
 
             // Check if user already approved (prevent duplicate approvals)
@@ -767,88 +788,28 @@ app.post("/api/slack/interactions", async (c) => {
             const newApprovedBy = updatedApproval.approvedBy ?? [];
             const approvalCount = newApprovedBy.length;
 
-            // Determine if execution should proceed
-            let shouldExecute = false;
-            if (approvalMode === "any_one") {
-              // For any_one mode, first approval triggers execution
-              shouldExecute = true;
-            } else if (approvalMode === "all_must") {
-              // For all_must mode, check if threshold is met
-              shouldExecute = approvalCount >= requiredApprovals;
+            // Single approval mode: first approval triggers execution.
+            await db
+              .update(approvals)
+              .set({
+                status: "approved",
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            const result = await executeBatchProposal({ approvalId, slackClient });
+            if (!result.ok) {
+              logger.error("Batch execution after approval failed", {
+                approvalId,
+                error: result.error,
+              });
             }
 
-            if (shouldExecute) {
-              // Transition to approved and create execution job
-              await db
-                .update(approvals)
-                .set({
-                  status: "approved",
-                  updatedAt: new Date(),
-                })
-                .where(eq(approvals.id, approvalId));
-
-              const [job] = await db
-                .insert(jobs)
-                .values({
-                  name: `batch-execution-${approvalId}`,
-                  description: `Execute batch approval: ${approval.title}`,
-                  status: "pending",
-                  requestedBy: approval.requestedBy,
-                  priority: "high",
-                  channelId: approval.requestedInChannel ?? null,
-                })
-                .returning({ id: jobs.id });
-
-              // Link job to approval
-              await db
-                .update(approvals)
-                .set({ jobId: job.id })
-                .where(eq(approvals.id, approvalId));
-
-              // Trigger immediate execution via /api/execute-now
-              const cronSecret = process.env.CRON_SECRET;
-              if (cronSecret) {
-                const executeUrl = `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/execute-now`;
-                await fetch(executeUrl, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${cronSecret}`,
-                  },
-                  body: JSON.stringify({ jobId: job.id, approvalId }),
-                });
-              }
-
-              logger.info("Batch approval approved and job created", {
-                approvalId,
-                jobId: job.id,
-                approvedBy: newApprovedBy,
-              });
-            } else {
-              // For all_must mode: not enough approvals yet, update the Slack card to show progress
-              logger.info("Approval recorded, waiting for more approvals", {
-                approvalId,
-                approvalMode,
-                approvalCount,
-                requiredApprovals,
-                approvedBy: newApprovedBy,
-              });
-
-              // Update Slack message to show approval progress
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                try {
-                  const progressText = `Approved by ${approvalCount}/${requiredApprovals}: ${newApprovedBy.map((id: string) => `<@${id}>`).join(", ")}`;
-                  await slackClient.chat.postEphemeral({
-                    channel: channelId,
-                    user: userId,
-                    text: `✓ Your approval recorded. ${progressText}`,
-                  });
-                } catch (updateErr) {
-                  logger.warn("Failed to send approval progress message", { approvalId, error: updateErr });
-                }
-              }
-            }
+            logger.info("Batch approval approved and execution started", {
+              approvalId,
+              approvedBy: newApprovedBy,
+              approvalCount,
+            });
           } catch (err) {
             recordError("interactions.approval_approve", err, { userId, approvalId });
             logger.error("Approval button handler failed", { userId, approvalId, error: err });
@@ -862,59 +823,15 @@ app.post("/api/slack/interactions", async (c) => {
 
         const rejectPromise = (async () => {
           try {
-            const { approvals } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-            const { isAdmin } = await import("./lib/permissions.js");
-
-            // First, fetch the current approval to check authorization and state
-            const approvalRows = await db
-              .select()
-              .from(approvals)
-              .where(eq(approvals.id, approvalId))
-              .limit(1);
-
-            const approval = approvalRows[0];
-            if (!approval) {
-              logger.error("Approval not found for rejection", { approvalId });
-              return;
-            }
-
-            // Check if approval is still pending
-            if (approval.status !== "pending") {
-              logger.warn("Rejection attempt on non-pending approval", { approvalId, status: approval.status, userId });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: `This approval has already been ${approval.status}.`,
-                });
-              }
-              return;
-            }
-
-            // Authorization check: look up credential live to determine approvers
-            const { isAuthorizedApprover } = await import("./lib/approval.js");
-            const credentialAuth = await isAuthorizedApprover(
-              approval.credentialKey,
-              approval.credentialOwner,
-              userId
-            );
-            const isAuthorized = isAdmin(userId) || credentialAuth;
-
-            if (!isAuthorized) {
-              logger.warn("Unauthorized rejection attempt", { approvalId, userId, credentialKey: approval.credentialKey });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: "You're not authorized to reject this.",
-                });
-              }
-              return;
-            }
+            const channelId = payload.channel?.id;
+            const approval = await loadAuthorizedPendingApproval({
+              approvalId,
+              userId,
+              channelId,
+              slackClient,
+              unauthorizedText: "You're not authorized to reject this.",
+            });
+            if (!approval) return;
 
             // Update approval status
             await db

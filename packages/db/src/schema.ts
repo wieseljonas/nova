@@ -702,8 +702,6 @@ export const approvals = pgTable(
     requestedBy: text("requested_by").notNull().default("nova"),
     requestedInChannel: text("requested_in_channel"),
     approvedBy: text("approved_by").array(),
-    approvalMode: text("approval_mode").notNull().default("any_one"),
-    requiredApprovals: integer("required_approvals").notNull().default(1),
     jobId: uuid("job_id").references(() => jobs.id),
     slackMessageTs: text("slack_message_ts"),
     slackChannel: text("slack_channel"),
@@ -714,10 +712,6 @@ export const approvals = pgTable(
     check(
       "approvals_status_check",
       sql`${table.status} IN ('pending','approved','rejected','executing','completed','failed')`,
-    ),
-    check(
-      "approvals_approval_mode_check",
-      sql`${table.approvalMode} IN ('any_one','all_must')`,
     ),
     index("approvals_status_idx").on(table.status),
     index("approvals_job_id_idx").on(table.jobId),

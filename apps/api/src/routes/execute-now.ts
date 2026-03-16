@@ -4,13 +4,12 @@ import { jobs } from "@aura/db/schema";
 import { eq } from "drizzle-orm";
 import { executeJob } from "../cron/execute-job.js";
 import { logger } from "../lib/logger.js";
-import { executeBatchProposal } from "../lib/batch-executor.js";
 
 export const executeNowApp = new Hono();
 
 /**
  * POST /api/execute-now
- * Immediately execute a job or batch approval.
+ * Immediately execute a job.
  * Requires CRON_SECRET auth header.
  */
 executeNowApp.post("/", async (c) => {
@@ -26,31 +25,10 @@ executeNowApp.post("/", async (c) => {
 
   try {
     const body = await c.req.json();
-    const { jobId, approvalId } = body;
+    const { jobId } = body;
 
     if (!jobId) {
       return c.json({ ok: false, error: "jobId is required" }, 400);
-    }
-
-    // If this is a batch execution job (has approvalId), run batch executor
-    if (approvalId) {
-      logger.info("execute-now: running batch executor", { jobId, approvalId });
-      const result = await executeBatchProposal({ approvalId });
-      
-      // Update job status
-      if (result.ok) {
-        await db
-          .update(jobs)
-          .set({ status: "completed", result: "Batch execution completed" })
-          .where(eq(jobs.id, jobId));
-      } else {
-        await db
-          .update(jobs)
-          .set({ status: "failed", result: `Batch execution failed: ${result.error}` })
-          .where(eq(jobs.id, jobId));
-      }
-
-      return c.json({ ok: result.ok, error: result.error });
     }
 
     // Regular job execution

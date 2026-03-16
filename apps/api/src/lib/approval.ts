@@ -1,17 +1,6 @@
 import { db } from "../db/client.js";
 import { credentials, type Credential } from "@aura/db/schema";
 import { eq, and } from "drizzle-orm";
-import { logger } from "./logger.js";
-
-// ── Types ───────────────────────────────────────────────────────────────────
-
-export interface ExecutionContext {
-  userId?: string;
-  channelId?: string;
-  threadTs?: string;
-  jobId?: string;
-  triggerType: "user_message" | "scheduled_job" | "autonomous";
-}
 
 // ── Access Check ────────────────────────────────────────────────────────────
 

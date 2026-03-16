@@ -1,7 +1,8 @@
 import { WebClient } from "@slack/web-api";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { approvals, approvalItems, type Approval, type ApprovalItem } from "@aura/db/schema";
+import { approvals, approvalItems, type Approval } from "@aura/db/schema";
+import { injectCredentialAuth, type ResolvedCredentialAuth } from "./credential-auth.js";
 import { logger } from "./logger.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -68,7 +69,6 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     if (credentialKey && credentialOwner) {
       const { credentials } = await import("@aura/db/schema");
       const { getApprovers, getApprovalChannel } = await import("./approval.js");
-      const { and, eq } = await import("drizzle-orm");
       const credRows = await db
         .select()
         .from(credentials)
@@ -87,9 +87,6 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
       }
     }
 
-    const approvalMode = "any_one";
-    const requiredApprovals = 1;
-
     // Create approval record
     const [approval] = await db
       .insert(approvals)
@@ -103,8 +100,6 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         totalItems: items.length,
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
-        approvalMode,
-        requiredApprovals,
       })
       .returning({ id: approvals.id });
 
@@ -297,34 +292,25 @@ export async function executeBatchProposal(args: {
 
     // Get credential for requests
     const { getApiCredentialWithType } = await import("./api-credentials.js");
-    const { credentials } = await import("@aura/db/schema");
-    let credential: any = null;
+    let credential: ResolvedCredentialAuth | null = null;
     if (approval.credentialKey && approval.credentialOwner) {
       try {
-        // Look up credential by key and owner
-        const credRows = await db
-          .select()
-          .from(credentials)
-          .where(
-            and(
-              eq(credentials.key, approval.credentialKey),
-              eq(credentials.ownerUserId, approval.credentialOwner)
-            )
-          )
-          .limit(1);
-        
-        const cred = credRows[0];
-        if (!cred) {
-          throw new Error(`Credential with key '${approval.credentialKey}' owned by '${approval.credentialOwner}' not found`);
-        }
-        
         // Get credential value with type info
-        credential = await getApiCredentialWithType(
+        const resolved = await getApiCredentialWithType(
           approval.credentialKey,
           approval.credentialOwner,
           approval.credentialOwner,
-          "write"
+          "write",
         );
+        if (!resolved) {
+          throw new Error(
+            `Credential with key '${approval.credentialKey}' owned by '${approval.credentialOwner}' not found or expired`,
+          );
+        }
+        credential = {
+          authScheme: resolved.authScheme,
+          value: resolved.value,
+        };
       } catch (err) {
         logger.error("executeBatchProposal: failed to load credential", {
           approvalId,
@@ -471,23 +457,14 @@ async function executeHttpRequest(args: {
   url: string;
   body?: any;
   headers?: Record<string, string>;
-  credential?: any;
+  credential?: ResolvedCredentialAuth | null;
 }): Promise<{ ok: boolean; status?: number; body?: any; error?: string }> {
   const { method, url, body, headers, credential } = args;
 
   try {
-    const requestHeaders: Record<string, string> = { ...headers };
-
-    // Add auth header if credential provided
-    if (credential) {
-      if (credential.type === "bearer") {
-        requestHeaders.Authorization = `Bearer ${credential.token}`;
-      } else if (credential.type === "basic") {
-        requestHeaders.Authorization = `Basic ${credential.token}`;
-      } else if (credential.type === "header" && credential.header_name) {
-        requestHeaders[credential.header_name] = credential.token;
-      }
-    }
+    const injected = injectCredentialAuth(url, headers, credential);
+    const requestHeaders = injected.headers;
+    const requestUrl = injected.url;
 
     const fetchOptions: RequestInit = {
       method,
@@ -501,7 +478,7 @@ async function executeHttpRequest(args: {
       }
     }
 
-    const response = await fetch(url, fetchOptions);
+    const response = await fetch(requestUrl, fetchOptions);
     const responseText = await response.text();
     let responseBody: any;
     try {
@@ -521,7 +498,7 @@ async function executeHttpRequest(args: {
       });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       // Retry once
-      const retryResponse = await fetch(url, fetchOptions);
+      const retryResponse = await fetch(requestUrl, fetchOptions);
       const retryText = await retryResponse.text();
       let retryBody: any;
       try {

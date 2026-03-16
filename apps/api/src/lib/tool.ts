@@ -1,9 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
-import { eq } from "drizzle-orm";
 import type { ZodType } from "zod";
-import { db } from "../db/client.js";
-import { checkAccess, getApprovers, getApprovalChannel, getCredentialForApproval } from "./approval.js";
+import { checkAccess, getCredentialForApproval } from "./approval.js";
 import { logger } from "./logger.js";
 import { generateProposalSummary } from "./proposal-summary.js";
 
@@ -70,13 +68,7 @@ interface ToolNameRef {
 
 /**
  * Wrapper around AI SDK's tool() that co-locates Slack card metadata with the
- * tool definition and adds SDK-native needsApproval governance + action logging.
- *
- * Tools with write/destructive risk tier use `needsApproval` to pause for
- * human approval. The SDK emits a `tool-approval-request` output part, and
- * respond.ts saves conversation state for resumption.
- *
- * Read-tier tools execute immediately with action logging.
+ * tool definition and adds Nova's HTTP governance checks for sensitive calls.
  */
 export function defineTool<TInput, TOutput>(config: {
   description: string;
