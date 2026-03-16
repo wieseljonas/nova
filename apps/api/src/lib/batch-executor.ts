@@ -1,9 +1,9 @@
 import { WebClient } from "@slack/web-api";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { approvals, approvalItems, approvalPolicies, type Approval, type ApprovalItem } from "@aura/db/schema";
+import { approvals, approvalItems, type Approval } from "@aura/db/schema";
+import { injectCredentialAuth, type ResolvedCredentialAuth } from "./credential-auth.js";
 import { logger } from "./logger.js";
-import { lookupPolicy, effectiveRiskTier } from "./approval.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ export interface ProposalItem {
 export interface CreateProposalArgs {
   title: string;
   description?: string;
-  credentialName?: string;
+  credentialKey?: string;
   credentialOwner?: string;
   items: ProposalItem[];
   requestedBy: string;
@@ -49,7 +49,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   approvalId?: string;
   error?: string;
 }> {
-  const { title, description, credentialName, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
+  const { title, description, credentialKey, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
 
   if (items.length === 0) {
     return { ok: false, error: "No items to approve" };
@@ -58,22 +58,34 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   const slackClient = injectedSlackClient ?? new WebClient(process.env.SLACK_BOT_TOKEN);
 
   try {
-    // Determine URL pattern and method from first item (for policy lookup)
+    // Determine URL pattern and method from first item
     const firstItem = items[0];
     const method = firstItem.method.toUpperCase();
     const url = firstItem.url;
 
-    // Look up approval policy
-    const policy = await lookupPolicy({
-      toolName: "http_request",
-      url,
-      method,
-      credentialName,
-    });
-
-    const approvalMode = policy?.approvalMode ?? "any_one";
-    const approverIds = policy?.approverIds ?? [];
-    const requiredApprovals = approvalMode === "all_must" ? (approverIds.length > 0 ? approverIds.length : 1) : 1;
+    // Look up credential to get approvers for the Slack card
+    let approverIds: string[] = [];
+    let approvalChannel: string | null = null;
+    if (credentialKey && credentialOwner) {
+      const { credentials } = await import("@aura/db/schema");
+      const { getApprovers, getApprovalChannel } = await import("./approval.js");
+      const credRows = await db
+        .select()
+        .from(credentials)
+        .where(
+          and(
+            eq(credentials.key, credentialKey),
+            eq(credentials.ownerUserId, credentialOwner)
+          )
+        )
+        .limit(1);
+      
+      const credential = credRows[0];
+      if (credential) {
+        approverIds = getApprovers(credential);
+        approvalChannel = getApprovalChannel(credential);
+      }
+    }
 
     // Create approval record
     const [approval] = await db
@@ -81,17 +93,13 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
       .values({
         title,
         description: description ?? null,
-        credentialName: credentialName ?? null,
+        credentialKey: credentialKey ?? null,
         credentialOwner: credentialOwner ?? requestedBy,
-        urlPattern: url.split("?")[0], // Strip query params for pattern
+        urlPattern: url.split("?")[0],
         httpMethod: method,
         totalItems: items.length,
-        policyId: policy?.id ?? null,
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
-        approvalMode,
-        approverIds,
-        requiredApprovals,
       })
       .returning({ id: approvals.id });
 
@@ -171,8 +179,8 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
       },
     ];
 
-    // Post to Slack (use policy channel if set, otherwise fallback to requestedInChannel)
-    const targetChannel = policy?.approvalChannel ?? requestedInChannel ?? process.env.AURA_DEFAULT_CHANNEL;
+    // Post to Slack
+    const targetChannel = approvalChannel ?? requestedInChannel ?? process.env.AURA_DEFAULT_CHANNEL;
 
     if (!targetChannel) {
       logger.warn("createProposal: no channel to post approval to", { approvalId });
@@ -284,27 +292,36 @@ export async function executeBatchProposal(args: {
 
     // Get credential for requests
     const { getApiCredentialWithType } = await import("./api-credentials.js");
-    let credential: any = null;
-    if (approval.credentialName) {
+    let credential: ResolvedCredentialAuth | null = null;
+    if (approval.credentialKey && approval.credentialOwner) {
       try {
-        const owner = approval.credentialOwner ?? approval.requestedBy;
-        credential = await getApiCredentialWithType(
-          approval.credentialName,
-          owner,
-          owner,
-          "write"
+        // Get credential value with type info
+        const resolved = await getApiCredentialWithType(
+          approval.credentialKey,
+          approval.credentialOwner,
+          approval.credentialOwner,
+          "write",
         );
+        if (!resolved) {
+          throw new Error(
+            `Credential with key '${approval.credentialKey}' owned by '${approval.credentialOwner}' not found or expired`,
+          );
+        }
+        credential = {
+          authScheme: resolved.authScheme,
+          value: resolved.value,
+        };
       } catch (err) {
         logger.error("executeBatchProposal: failed to load credential", {
           approvalId,
-          credentialName: approval.credentialName,
+          credentialKey: approval.credentialKey,
           error: err,
         });
         await db
           .update(approvals)
           .set({ status: "failed", updatedAt: new Date() })
           .where(eq(approvals.id, approvalId));
-        const errMsg = `Failed to load credential '${approval.credentialName}' (owner: ${approval.credentialOwner ?? approval.requestedBy}). ${err instanceof Error ? err.message : ""}`.trim();
+        const errMsg = `Failed to load credential '${approval.credentialKey}'. ${err instanceof Error ? err.message : ""}`.trim();
         await updateApprovalCard(slackClient, approval, "failed", errMsg);
         return { ok: false, error: errMsg };
       }
@@ -440,23 +457,14 @@ async function executeHttpRequest(args: {
   url: string;
   body?: any;
   headers?: Record<string, string>;
-  credential?: any;
+  credential?: ResolvedCredentialAuth | null;
 }): Promise<{ ok: boolean; status?: number; body?: any; error?: string }> {
   const { method, url, body, headers, credential } = args;
 
   try {
-    const requestHeaders: Record<string, string> = { ...headers };
-
-    // Add auth header if credential provided
-    if (credential) {
-      if (credential.type === "bearer") {
-        requestHeaders.Authorization = `Bearer ${credential.token}`;
-      } else if (credential.type === "basic") {
-        requestHeaders.Authorization = `Basic ${credential.token}`;
-      } else if (credential.type === "header" && credential.header_name) {
-        requestHeaders[credential.header_name] = credential.token;
-      }
-    }
+    const injected = injectCredentialAuth(url, headers, credential);
+    const requestHeaders = injected.headers;
+    const requestUrl = injected.url;
 
     const fetchOptions: RequestInit = {
       method,
@@ -470,7 +478,7 @@ async function executeHttpRequest(args: {
       }
     }
 
-    const response = await fetch(url, fetchOptions);
+    const response = await fetch(requestUrl, fetchOptions);
     const responseText = await response.text();
     let responseBody: any;
     try {
@@ -490,7 +498,7 @@ async function executeHttpRequest(args: {
       });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
       // Retry once
-      const retryResponse = await fetch(url, fetchOptions);
+      const retryResponse = await fetch(requestUrl, fetchOptions);
       const retryText = await retryResponse.text();
       let retryBody: any;
       try {

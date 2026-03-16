@@ -2,7 +2,6 @@ import { eq, and, or, isNull, inArray, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   credentials,
-  credentialGrants,
   credentialAuditLog,
   userProfiles,
   type Credential,
@@ -93,23 +92,27 @@ export async function hasPermission(
 ): Promise<boolean> {
   if (userId === credentialOwnerId) return true;
 
-  const grant = await db
+  const rows = await db
     .select()
-    .from(credentialGrants)
-    .where(
-      and(
-        eq(credentialGrants.credentialId, credentialId),
-        eq(credentialGrants.granteeId, userId),
-        isNull(credentialGrants.revokedAt),
-      ),
-    )
+    .from(credentials)
+    .where(eq(credentials.id, credentialId))
     .limit(1);
 
-  if (!grant.length) return false;
+  if (!rows.length) return false;
 
-  const grantPerm = grant[0].permission;
-  const hierarchy: Array<"read" | "write" | "admin"> = ["read", "write", "admin"];
-  return hierarchy.indexOf(grantPerm as typeof requiredPermission) >= hierarchy.indexOf(requiredPermission);
+  const cred = rows[0];
+  const readerIds = (cred.readerUserIds as string[]) ?? [];
+  const writerIds = (cred.writerUserIds as string[]) ?? [];
+
+  if (requiredPermission === "read") {
+    return readerIds.includes(userId) || writerIds.includes(userId);
+  }
+
+  if (requiredPermission === "write" || requiredPermission === "admin") {
+    return writerIds.includes(userId);
+  }
+
+  return false;
 }
 
 export async function storeApiCredential(
@@ -183,14 +186,14 @@ export async function storeApiCredential(
   const [row] = await db
     .insert(credentials)
     .values({
-      ownerId,
-      name,
+      ownerUserId: ownerId,
+      key: name,
       authScheme,
       value: encrypted,
       expiresAt: expiresAt ?? null,
     })
     .onConflictDoUpdate({
-      target: [credentials.ownerId, credentials.name],
+      target: [credentials.ownerUserId, credentials.key],
       set: {
         value: encrypted,
         authScheme,
@@ -219,7 +222,7 @@ async function fetchAndAuthorize(
   const rows = await db
     .select()
     .from(credentials)
-    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)))
+    .where(and(eq(credentials.ownerUserId, ownerId), eq(credentials.key, name)))
     .limit(1);
 
   const cred = rows[0];
@@ -227,7 +230,7 @@ async function fetchAndAuthorize(
 
   if (cred.expiresAt && cred.expiresAt < new Date()) {
     await audit(cred.id, name, requestingUserId, "expired_access_attempt");
-    await notifyOwnerExpired(cred.ownerId, name).catch(() => {});
+    await notifyOwnerExpired(cred.ownerUserId, name).catch(() => {});
     return null;
   }
 
@@ -397,8 +400,8 @@ export async function getJobApiCredential(
     .from(credentials)
     .where(
       and(
-        eq(credentials.name, name),
-        eq(credentials.ownerId, creatorId),
+        eq(credentials.key, name),
+        eq(credentials.ownerUserId, creatorId),
         sql`${credentials.id} = ANY(${declaredCredentialIds})`,
       ),
     )
@@ -419,12 +422,12 @@ export async function getJobApiCredential(
 
 export async function getCredentialById(
   credentialId: string,
-): Promise<{ id: string; name: string; ownerId: string } | null> {
+): Promise<{ id: string; key: string; ownerUserId: string } | null> {
   const rows = await db
     .select({
       id: credentials.id,
-      name: credentials.name,
-      ownerId: credentials.ownerId,
+      key: credentials.key,
+      ownerUserId: credentials.ownerUserId,
     })
     .from(credentials)
     .where(eq(credentials.id, credentialId))
@@ -437,83 +440,123 @@ export async function listApiCredentials(
 ): Promise<
   Array<{
     id: string;
-    name: string;
+    key: string;
     authScheme: AuthScheme;
-    owner_id: string;
+    owner_user_id: string;
     expires_at: Date | null;
-    allowed_methods: string[] | null;
-    permission: "owner" | "read" | "write" | "admin";
+    reader_user_ids: string[];
+    writer_user_ids: string[];
+    approval_slack_channel_id: string | null;
+    permission: "owner" | "read" | "write";
   }>
 > {
-  const owned = await db
+  const allCreds = await db
     .select({
       id: credentials.id,
-      name: credentials.name,
+      key: credentials.key,
       authScheme: credentials.authScheme,
-      owner_id: credentials.ownerId,
+      owner_user_id: credentials.ownerUserId,
       expires_at: credentials.expiresAt,
-      allowed_methods: credentials.allowedMethods,
+      reader_user_ids: credentials.readerUserIds,
+      writer_user_ids: credentials.writerUserIds,
+      approval_slack_channel_id: credentials.approvalSlackChannelId,
     })
     .from(credentials)
-    .where(eq(credentials.ownerId, userId));
-
-  const granted = await db
-    .select({
-      id: credentials.id,
-      name: credentials.name,
-      authScheme: credentials.authScheme,
-      owner_id: credentials.ownerId,
-      expires_at: credentials.expiresAt,
-      allowed_methods: credentials.allowedMethods,
-      permission: credentialGrants.permission,
-    })
-    .from(credentialGrants)
-    .innerJoin(credentials, eq(credentialGrants.credentialId, credentials.id))
     .where(
-      and(
-        eq(credentialGrants.granteeId, userId),
-        isNull(credentialGrants.revokedAt),
-      ),
+      or(
+        eq(credentials.ownerUserId, userId),
+        sql`${credentials.readerUserIds} @> ${JSON.stringify([userId])}::jsonb`,
+        sql`${credentials.writerUserIds} @> ${JSON.stringify([userId])}::jsonb`
+      )
     );
 
-  return [
-    ...owned.map((r) => ({ ...r, authScheme: r.authScheme as AuthScheme, permission: "owner" as const })),
-    ...granted.map((r) => ({ ...r, authScheme: r.authScheme as AuthScheme, permission: r.permission as "read" | "write" | "admin" })),
-  ];
+  return allCreds.map((cred) => {
+    let permission: "owner" | "read" | "write" = "read";
+    
+    if (cred.owner_user_id === userId) {
+      permission = "owner";
+    } else if (((cred.writer_user_ids as any) ?? []).includes(userId)) {
+      permission = "write";
+    } else if (((cred.reader_user_ids as any) ?? []).includes(userId)) {
+      permission = "read";
+    }
+
+    return {
+      ...cred,
+      authScheme: cred.authScheme as AuthScheme,
+      reader_user_ids: (cred.reader_user_ids as any) ?? [],
+      writer_user_ids: (cred.writer_user_ids as any) ?? [],
+      permission,
+    };
+  });
 }
 
-export async function listGrantsForCredentials(
+export async function listAccessForCredentials(
   credentialIds: string[],
 ): Promise<
   Array<{
     credentialId: string;
-    granteeId: string;
-    permission: string;
+    userId: string;
+    permission: "read" | "write";
     displayName: string | null;
   }>
 > {
   if (credentialIds.length === 0) return [];
 
-  const grants = await db
-    .select({
-      credentialId: credentialGrants.credentialId,
-      granteeId: credentialGrants.granteeId,
-      permission: credentialGrants.permission,
-      displayName: userProfiles.displayName,
-    })
-    .from(credentialGrants)
-    .leftJoin(
-      userProfiles,
-      eq(credentialGrants.granteeId, userProfiles.slackUserId),
-    )
-    .where(
-      and(
-        inArray(credentialGrants.credentialId, credentialIds),
-        isNull(credentialGrants.revokedAt),
-      ),
-    );
+  const creds = await db
+    .select()
+    .from(credentials)
+    .where(inArray(credentials.id, credentialIds));
 
-  return grants;
+  const access: Array<{
+    credentialId: string;
+    userId: string;
+    permission: "read" | "write";
+    displayName: string | null;
+  }> = [];
+
+  for (const cred of creds) {
+    const readerIds = (cred.readerUserIds as string[]) ?? [];
+    const writerIds = (cred.writerUserIds as string[]) ?? [];
+
+    for (const readerId of readerIds) {
+      access.push({
+        credentialId: cred.id,
+        userId: readerId,
+        permission: "read",
+        displayName: null,
+      });
+    }
+
+    for (const writerId of writerIds) {
+      access.push({
+        credentialId: cred.id,
+        userId: writerId,
+        permission: "write",
+        displayName: null,
+      });
+    }
+  }
+
+  // Fetch display names in bulk
+  const allUserIds = [...new Set(access.map(a => a.userId))];
+  if (allUserIds.length > 0) {
+    const profiles = await db
+      .select({
+        slackUserId: userProfiles.slackUserId,
+        displayName: userProfiles.displayName,
+      })
+      .from(userProfiles)
+      .where(inArray(userProfiles.slackUserId, allUserIds));
+
+    const displayNameMap = new Map(profiles.map(p => [p.slackUserId, p.displayName]));
+    
+    for (const item of access) {
+      item.displayName = displayNameMap.get(item.userId) ?? null;
+    }
+  }
+
+  return access;
 }
 
 export async function deleteApiCredential(
@@ -529,21 +572,20 @@ export async function deleteApiCredential(
   const cred = rows[0];
   if (!cred) return false;
 
-  if (cred.ownerId !== requestingUserId) {
-    await audit(cred.id, cred.name, requestingUserId, "delete", "access_denied");
+  if (cred.ownerUserId !== requestingUserId) {
+    await audit(cred.id, cred.key, requestingUserId, "delete", "access_denied");
     return false;
   }
 
   await db.delete(credentials).where(eq(credentials.id, credentialId));
-  await audit(null, cred.name, requestingUserId, "delete");
+  await audit(null, cred.key, requestingUserId, "delete");
   return true;
 }
 
-export async function grantApiCredentialAccess(
+export async function addCredentialReader(
   credentialId: string,
   granterId: string,
   granteeId: string,
-  permission: "read" | "write" | "admin",
 ): Promise<void> {
   const rows = await db
     .select()
@@ -554,35 +596,30 @@ export async function grantApiCredentialAccess(
   const cred = rows[0];
   if (!cred) throw new Error("Credential not found");
 
-  const allowed = await hasPermission(cred.ownerId, credentialId, granterId, "admin");
-  if (!allowed) {
-    throw new Error("Only the owner or an admin grantee can grant access");
+  const allowed = await hasPermission(cred.ownerUserId, credentialId, granterId, "write");
+  if (!allowed && cred.ownerUserId !== granterId) {
+    throw new Error("Only the owner or a writer can grant access");
   }
 
-  await db
-    .insert(credentialGrants)
-    .values({
-      credentialId,
-      granteeId,
-      permission,
-      grantedBy: granterId,
-    })
-    .onConflictDoUpdate({
-      target: [credentialGrants.credentialId, credentialGrants.granteeId],
-      set: {
-        permission,
-        grantedBy: granterId,
-        grantedAt: new Date(),
-        revokedAt: null,
-      },
-    });
+  const readerIds = (cred.readerUserIds as string[]) ?? [];
+  if (!readerIds.includes(granteeId)) {
+    readerIds.push(granteeId);
+    
+    await db
+      .update(credentials)
+      .set({ 
+        readerUserIds: readerIds as any,
+        updatedAt: new Date()
+      })
+      .where(eq(credentials.id, credentialId));
+  }
 
-  await audit(credentialId, cred.name, granterId, "grant", `grantee:${granteeId} permission:${permission}`);
+  await audit(credentialId, cred.key, granterId, "grant", `grantee:${granteeId} permission:read`);
 }
 
-export async function revokeApiCredentialAccess(
+export async function addCredentialWriter(
   credentialId: string,
-  revokerId: string,
+  granterId: string,
   granteeId: string,
 ): Promise<void> {
   const rows = await db
@@ -594,25 +631,26 @@ export async function revokeApiCredentialAccess(
   const cred = rows[0];
   if (!cred) throw new Error("Credential not found");
 
-  const allowed = await hasPermission(cred.ownerId, credentialId, revokerId, "admin");
-  if (!allowed) {
-    throw new Error("Only the owner or an admin grantee can revoke access");
+  const allowed = await hasPermission(cred.ownerUserId, credentialId, granterId, "write");
+  if (!allowed && cred.ownerUserId !== granterId) {
+    throw new Error("Only the owner or a writer can grant access");
   }
 
-  await db
-    .update(credentialGrants)
-    .set({ revokedAt: new Date() })
-    .where(
-      and(
-        eq(credentialGrants.credentialId, credentialId),
-        eq(credentialGrants.granteeId, granteeId),
-        isNull(credentialGrants.revokedAt),
-      ),
-    );
+  const writerIds = (cred.writerUserIds as string[]) ?? [];
+  if (!writerIds.includes(granteeId)) {
+    writerIds.push(granteeId);
+    
+    await db
+      .update(credentials)
+      .set({ 
+        writerUserIds: writerIds as any,
+        updatedAt: new Date()
+      })
+      .where(eq(credentials.id, credentialId));
+  }
 
-  await audit(credentialId, cred.name, revokerId, "revoke", `grantee:${granteeId}`);
+  await audit(credentialId, cred.key, granterId, "grant", `grantee:${granteeId} permission:write`);
 }
-
 
 export async function setCredentialDisplayName(
   name: string,
@@ -626,7 +664,7 @@ export async function setCredentialDisplayName(
   await db
     .update(credentials)
     .set({ displayName, updatedAt: new Date() })
-    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)));
+    .where(and(eq(credentials.ownerUserId, ownerId), eq(credentials.key, name)));
 }
 
 /** Lightweight lookup -- just the display_name for a credential. Used by status spinners. */
@@ -638,58 +676,9 @@ export async function getCredentialDisplayName(
   const rows = await db
     .select({ displayName: credentials.displayName })
     .from(credentials)
-    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)))
+    .where(and(eq(credentials.ownerUserId, ownerId), eq(credentials.key, name)))
     .limit(1);
   return rows[0]?.displayName ?? null;
-}
-
-export async function getCredentialMethods(
-  credentialName: string,
-  ownerId: string,
-): Promise<string[] | null> {
-  validateName(credentialName);
-
-  const rows = await db
-    .select({ allowedMethods: credentials.allowedMethods })
-    .from(credentials)
-    .where(and(eq(credentials.ownerId, ownerId), eq(credentials.name, credentialName)))
-    .limit(1);
-
-  if (!rows[0]) return null;
-  return rows[0].allowedMethods ?? [];
-}
-
-export async function updateCredentialMethods(
-  credentialId: string,
-  requestingUserId: string,
-  allowedMethods: string[],
-): Promise<void> {
-  const rows = await db
-    .select()
-    .from(credentials)
-    .where(eq(credentials.id, credentialId))
-    .limit(1);
-
-  const cred = rows[0];
-  if (!cred) throw new Error("Credential not found");
-
-  const allowed = await hasPermission(cred.ownerId, credentialId, requestingUserId, "admin");
-  if (!allowed) {
-    throw new Error("Only the owner or an admin can update credential permissions");
-  }
-
-  await db
-    .update(credentials)
-    .set({ allowedMethods, updatedAt: new Date() })
-    .where(eq(credentials.id, credentialId));
-
-  await audit(
-    credentialId,
-    cred.name,
-    requestingUserId,
-    "update",
-    `allowed_methods: ${JSON.stringify(allowedMethods)}`,
-  );
 }
 
 function scrubValue(error: unknown, plaintext: string): Error {
@@ -721,7 +710,7 @@ export async function withApiCredential<T>(
       .select({ id: credentials.id })
       .from(credentials)
       .where(
-        and(eq(credentials.ownerId, ownerId), eq(credentials.name, name)),
+        and(eq(credentials.ownerUserId, ownerId), eq(credentials.key, name)),
       )
       .limit(1);
     if (rows[0]) {
@@ -781,57 +770,7 @@ export async function runCredentialMigration(): Promise<void> {
   logger.info("runCredentialMigration: folding token_url into oauth_client value blobs");
 
   // Fetch all oauth_client rows via raw SQL (Drizzle schema no longer has these columns)
-  const rows = await rawSql`
-    SELECT id, value, token_url
-    FROM credentials
-    WHERE type = 'oauth_client'
-  `;
-
-  for (const row of rows) {
-    try {
-      const decrypted = decryptCredential(row.value as string);
-      let parsed: Record<string, string> = {};
-      try {
-        parsed = JSON.parse(decrypted);
-      } catch {
-        // value wasn't JSON yet — treat as empty object
-      }
-
-      // Migrate token_url if present; if null/undefined, leave it out of the JSON blob
-      // (credential will need manual repair later, but won't crash on read)
-      if (row.token_url && !parsed.token_url) {
-        parsed.token_url = row.token_url as string;
-      } else if (!row.token_url && !parsed.token_url) {
-        // No token_url available — log warning but continue migration
-        logger.warn("runCredentialMigration: oauth_client credential missing token_url", {
-          id: row.id,
-        });
-        // Don't set token_url in the blob; the credential will fail validation on read,
-        // but at least the migration won't crash
-      }
-
-      const { encryptCredential: enc } = await import("./credentials.js");
-      const reEncrypted = enc(JSON.stringify(parsed));
-
-      await rawSql`
-        UPDATE credentials
-        SET value = ${reEncrypted},
-            auth_scheme = 'oauth_client',
-            updated_at = NOW()
-        WHERE id = ${row.id}
-      `;
-    } catch (err) {
-      logger.error("runCredentialMigration: failed to migrate row", { id: row.id, err });
-    }
-  }
-
-  // Ensure all legacy token rows are marked as bearer
-  await rawSql`
-    UPDATE credentials
-    SET auth_scheme = 'bearer'
-    WHERE type = 'token'
-      AND auth_scheme != 'bearer'
-  `;
-
-  logger.info("runCredentialMigration: complete");
+  // This migration is obsolete - the credential schema has been updated
+  // and the legacy 'type' and 'token_url' columns no longer exist
+  logger.info("runCredentialMigration: skipping (already migrated)");
 }

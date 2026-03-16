@@ -12,19 +12,17 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { Dialog, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   updateCredentialValue,
-  grantCredentialAccess,
-  revokeCredentialAccess,
   deleteCredential,
 } from "../actions";
-import { ArrowLeft, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Trash2 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import type { Credential, CredentialGrant, CredentialAuditEntry } from "@schema";
+import type { Credential, CredentialAuditEntry } from "@schema";
 
 interface CredentialData extends Credential {
   maskedValue: string;
   ownerName: string;
-  grants: CredentialGrant[];
-  granteeNames: Record<string, string>;
+  access: Array<{ userId: string; permission: 'read' | 'write' }>;
+  userNames: Record<string, string>;
   auditLog: CredentialAuditEntry[];
 }
 
@@ -32,28 +30,12 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
   const router = useRouter();
   const [showUpdateValue, setShowUpdateValue] = useState(false);
   const [newValue, setNewValue] = useState("");
-  const [showGrant, setShowGrant] = useState(false);
-  const [granteeId, setGranteeId] = useState("");
-  const [permission, setPermission] = useState("read");
 
   async function handleUpdateValue() {
     if (!newValue) return;
     await updateCredentialValue(data.id, newValue);
     setShowUpdateValue(false);
     setNewValue("");
-    router.refresh();
-  }
-
-  async function handleGrant() {
-    if (!granteeId) return;
-    await grantCredentialAccess(data.id, granteeId, permission, "dashboard");
-    setShowGrant(false);
-    setGranteeId("");
-    router.refresh();
-  }
-
-  async function handleRevoke(grantId: string) {
-    await revokeCredentialAccess(grantId, data.id);
     router.refresh();
   }
 
@@ -70,7 +52,7 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
           <Button variant="ghost" size="icon"><ArrowLeft className="h-4 w-4" /></Button>
         </Link>
         <div>
-          <h1 className="text-base font-semibold font-mono">{data.name}</h1>
+          <h1 className="text-base font-semibold font-mono">{data.key}</h1>
           <p className="text-sm text-muted-foreground">Owned by {data.ownerName}</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -106,46 +88,31 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
         </CardContent>
       </Card>
 
-      <Tabs defaultValue="grants">
+      <Tabs defaultValue="access">
         <TabsList>
-          <TabsTrigger value="grants">Access Grants</TabsTrigger>
+          <TabsTrigger value="access">Access List</TabsTrigger>
           <TabsTrigger value="audit">Audit Log</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="grants">
-          <div className="flex justify-end mb-2">
-            <Button size="sm" onClick={() => setShowGrant(true)}>
-              <UserPlus className="h-3.5 w-3.5 mr-1" /> Grant Access
-            </Button>
-          </div>
+        <TabsContent value="access">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Grantee</TableHead>
+                <TableHead>User</TableHead>
                 <TableHead>Permission</TableHead>
-                <TableHead>Granted</TableHead>
-                <TableHead>Revoked</TableHead>
-                <TableHead className="w-20" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {data.grants.map((grant) => (
-                <TableRow key={grant.id}>
-                  <TableCell className="text-sm">{data.granteeNames[grant.granteeId] || grant.granteeId}</TableCell>
-                  <TableCell><Badge variant="secondary">{grant.permission}</Badge></TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{formatDate(grant.grantedAt)}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{formatDate(grant.revokedAt)}</TableCell>
-                  <TableCell>
-                    {!grant.revokedAt && (
-                      <Button variant="outline" size="sm" onClick={() => handleRevoke(grant.id)}>Revoke</Button>
-                    )}
-                  </TableCell>
+              {data.access.map((item) => (
+                <TableRow key={item.userId}>
+                  <TableCell className="text-sm">{data.userNames[item.userId] || item.userId}</TableCell>
+                  <TableCell><Badge variant="secondary">{item.permission}</Badge></TableCell>
                 </TableRow>
               ))}
-              {data.grants.length === 0 && (
+              {data.access.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-4">
-                    No access grants
+                  <TableCell colSpan={2} className="text-center text-muted-foreground py-4">
+                    No additional access granted (owner only)
                   </TableCell>
                 </TableRow>
               )}
@@ -197,27 +164,6 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
         </div>
       </Dialog>
 
-      <Dialog open={showGrant} onOpenChange={setShowGrant}>
-        <DialogHeader>
-          <DialogTitle>Grant Access</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3">
-          <Input placeholder="Grantee Slack User ID" value={granteeId} onChange={(e) => setGranteeId(e.target.value)} />
-          <select
-            value={permission}
-            onChange={(e) => setPermission(e.target.value)}
-            className="h-8 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px]"
-          >
-            <option value="read">Read</option>
-            <option value="write">Write</option>
-            <option value="admin">Admin</option>
-          </select>
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setShowGrant(false)}>Cancel</Button>
-            <Button onClick={handleGrant}>Grant</Button>
-          </div>
-        </div>
-      </Dialog>
     </>
   );
 }

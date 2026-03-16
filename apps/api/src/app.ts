@@ -18,15 +18,15 @@ import {
   openUpdateCredentialModal,
   openShareCredentialModal,
   openCredentialAccessModal,
-  openCredentialPermissionsModal,
 } from "./slack/home.js";
 import {
   storeApiCredential,
   deleteApiCredential,
-  grantApiCredentialAccess,
+  addCredentialReader,
+  addCredentialWriter,
   listApiCredentials,
+  listAccessForCredentials,
   hasPermission,
-  updateCredentialMethods,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
 import { executionContext } from "./lib/tool.js";
@@ -34,10 +34,12 @@ import { setSetting } from "./lib/settings.js";
 import { logger } from "./lib/logger.js";
 import { recordError } from "./lib/metrics.js";
 import { safePostMessage } from "./lib/slack-messaging.js";
+import { executeBatchProposal } from "./lib/batch-executor.js";
+import { isAuthorizedApprover } from "./lib/approval.js";
 import crypto from "node:crypto";
-import { eq, sql } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
-import { notes, feedback } from "@aura/db/schema";
+import { approvals, notes, feedback } from "@aura/db/schema";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -320,6 +322,116 @@ app.post("/api/slack/events", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Helper Functions ────────────────────────────────────────────────────────
+
+/** Extract credential value from modal state based on auth scheme */
+function extractCredentialValue(
+  values: Record<string, any> | undefined,
+  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account"
+): string | undefined {
+  if (authScheme === "oauth_client") {
+    const clientId = values?.cred_client_id_block?.cred_client_id?.value;
+    const clientSecret = values?.cred_client_secret_block?.cred_client_secret?.value;
+    const tokenUrl = values?.cred_token_url_block?.cred_token_url?.value;
+    if (clientId && clientSecret && tokenUrl) {
+      return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
+    }
+  } else if (authScheme === "basic") {
+    const username = values?.cred_username_block?.cred_username?.value;
+    const password = values?.cred_password_block?.cred_password?.value ?? "";
+    if (username) {
+      return JSON.stringify({ username, password });
+    }
+  } else if (authScheme === "header" || authScheme === "query") {
+    const key = values?.cred_key_block?.cred_key?.value;
+    const secret = values?.cred_secret_block?.cred_secret?.value;
+    if (key && secret) {
+      return JSON.stringify({ key, secret });
+    }
+  } else if (authScheme === "google_service_account") {
+    const jsonKey = values?.cred_gsa_json_block?.cred_gsa_json?.value;
+    const scopes = values?.cred_gsa_scopes_block?.cred_gsa_scopes?.value;
+    if (jsonKey) {
+      try {
+        const parsed = JSON.parse(jsonKey);
+        if (scopes) parsed.scopes = scopes;
+        return JSON.stringify(parsed);
+      } catch {
+        return undefined;
+      }
+    }
+  } else {
+    return values?.cred_value_block?.cred_value?.value;
+  }
+  return undefined;
+}
+
+async function postEphemeralIfChannel(
+  slackClient: WebClient,
+  channelId: string | undefined,
+  userId: string,
+  text: string,
+): Promise<void> {
+  if (!channelId) return;
+  await slackClient.chat.postEphemeral({
+    channel: channelId,
+    user: userId,
+    text,
+  });
+}
+
+async function loadAuthorizedPendingApproval(args: {
+  approvalId: string;
+  userId: string;
+  channelId?: string;
+  slackClient: WebClient;
+  unauthorizedText: string;
+}): Promise<(typeof approvals.$inferSelect) | null> {
+  const { approvalId, userId, channelId, slackClient, unauthorizedText } = args;
+
+  const approvalRows = await db
+    .select()
+    .from(approvals)
+    .where(eq(approvals.id, approvalId))
+    .limit(1);
+
+  const approval = approvalRows[0];
+  if (!approval) {
+    logger.error("Approval not found", { approvalId });
+    return null;
+  }
+
+  if (approval.status !== "pending") {
+    logger.warn("Approval is not pending", { approvalId, status: approval.status, userId });
+    await postEphemeralIfChannel(
+      slackClient,
+      channelId,
+      userId,
+      `This approval has already been ${approval.status}.`,
+    );
+    return null;
+  }
+
+  const credentialAuth = await isAuthorizedApprover(
+    approval.credentialKey,
+    approval.credentialOwner,
+    userId,
+  );
+  const authorized = isAdmin(userId) || credentialAuth;
+
+  if (!authorized) {
+    logger.warn("Unauthorized approval action", {
+      approvalId,
+      userId,
+      credentialKey: approval.credentialKey,
+    });
+    await postEphemeralIfChannel(slackClient, channelId, userId, unauthorizedText);
+    return null;
+  }
+
+  return approval;
+}
+
 // ── Slack Interactions Endpoint ─────────────────────────────────────────────
 
 app.post("/api/slack/interactions", async (c) => {
@@ -521,14 +633,14 @@ app.post("/api/slack/interactions", async (c) => {
           if (payload.trigger_id) {
             const creds = await listApiCredentials(userId);
             const cred = creds.find((c) => c.id === credId);
-            const credName = cred?.name ?? "credential";
+            const credKey = cred?.key ?? "credential";
             const credAuthScheme = (cred?.authScheme ??
               "bearer") as "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account";
             const updatePromise = openUpdateCredentialModal(
               slackClient,
               payload.trigger_id,
               credId,
-              credName,
+              credKey,
               credAuthScheme,
             ).catch((err) => {
               recordError("interactions.api_credential_update_modal", err, { userId, credId });
@@ -570,26 +682,6 @@ app.post("/api/slack/interactions", async (c) => {
             recordError("interactions.api_credential_access_modal", err, { userId, credId });
           });
           waitUntil(accessPromise);
-        } else if (selectedValue.startsWith("api_credential_permissions_") && payload.trigger_id) {
-          const credId = selectedValue.replace("api_credential_permissions_", "");
-          const permissionsPromise = (async () => {
-            try {
-              const creds = await listApiCredentials(userId);
-              const cred = creds.find((c) => c.id === credId);
-              if (cred) {
-                await openCredentialPermissionsModal(
-                  slackClient,
-                  payload.trigger_id!,
-                  credId,
-                  cred.name,
-                  cred.allowed_methods,
-                );
-              }
-            } catch (err) {
-              recordError("interactions.api_credential_permissions_modal", err, { userId, credId });
-            }
-          })();
-          waitUntil(permissionsPromise);
         }
       }
 
@@ -651,60 +743,16 @@ app.post("/api/slack/interactions", async (c) => {
 
         const approvePromise = (async () => {
           try {
-            const { approvals, jobs } = await import("@aura/db/schema");
-            const { eq, sql } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-            const { isAdmin } = await import("./lib/permissions.js");
+            const channelId = payload.channel?.id;
+            const approval = await loadAuthorizedPendingApproval({
+              approvalId,
+              userId,
+              channelId,
+              slackClient,
+              unauthorizedText: "You're not authorized to approve this.",
+            });
+            if (!approval) return;
 
-            // First, fetch the current approval to check authorization and state
-            const approvalRows = await db
-              .select()
-              .from(approvals)
-              .where(eq(approvals.id, approvalId))
-              .limit(1);
-
-            const approval = approvalRows[0];
-            if (!approval) {
-              logger.error("Approval not found", { approvalId });
-              return;
-            }
-
-            // Check if approval is still pending
-            if (approval.status !== "pending") {
-              logger.warn("Approval is not pending", { approvalId, status: approval.status, userId });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: `This approval has already been ${approval.status}.`,
-                });
-              }
-              return;
-            }
-
-            // BUG FIX 1: Authorization check
-            const approverIds = approval.approverIds ?? [];
-            const isAuthorized = 
-              isAdmin(userId) || 
-              (approverIds.length === 0 ? isAdmin(userId) : approverIds.includes(userId));
-
-            if (!isAuthorized) {
-              logger.warn("Unauthorized approval attempt", { approvalId, userId, approverIds });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: "You're not authorized to approve this.",
-                });
-              }
-              return;
-            }
-
-            // BUG FIX 2: Implement all_must approval mode logic
-            const approvalMode = approval.approvalMode ?? "any_one";
-            const requiredApprovals = approval.requiredApprovals ?? 1;
             const currentApprovedBy = approval.approvedBy ?? [];
 
             // Check if user already approved (prevent duplicate approvals)
@@ -740,88 +788,28 @@ app.post("/api/slack/interactions", async (c) => {
             const newApprovedBy = updatedApproval.approvedBy ?? [];
             const approvalCount = newApprovedBy.length;
 
-            // Determine if execution should proceed
-            let shouldExecute = false;
-            if (approvalMode === "any_one") {
-              // For any_one mode, first approval triggers execution
-              shouldExecute = true;
-            } else if (approvalMode === "all_must") {
-              // For all_must mode, check if threshold is met
-              shouldExecute = approvalCount >= requiredApprovals;
+            // Single approval mode: first approval triggers execution.
+            await db
+              .update(approvals)
+              .set({
+                status: "approved",
+                updatedAt: new Date(),
+              })
+              .where(eq(approvals.id, approvalId));
+
+            const result = await executeBatchProposal({ approvalId, slackClient });
+            if (!result.ok) {
+              logger.error("Batch execution after approval failed", {
+                approvalId,
+                error: result.error,
+              });
             }
 
-            if (shouldExecute) {
-              // Transition to approved and create execution job
-              await db
-                .update(approvals)
-                .set({
-                  status: "approved",
-                  updatedAt: new Date(),
-                })
-                .where(eq(approvals.id, approvalId));
-
-              const [job] = await db
-                .insert(jobs)
-                .values({
-                  name: `batch-execution-${approvalId}`,
-                  description: `Execute batch approval: ${approval.title}`,
-                  status: "pending",
-                  requestedBy: approval.requestedBy,
-                  priority: "high",
-                  channelId: approval.requestedInChannel ?? null,
-                })
-                .returning({ id: jobs.id });
-
-              // Link job to approval
-              await db
-                .update(approvals)
-                .set({ jobId: job.id })
-                .where(eq(approvals.id, approvalId));
-
-              // Trigger immediate execution via /api/execute-now
-              const cronSecret = process.env.CRON_SECRET;
-              if (cronSecret) {
-                const executeUrl = `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000"}/api/execute-now`;
-                await fetch(executeUrl, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${cronSecret}`,
-                  },
-                  body: JSON.stringify({ jobId: job.id, approvalId }),
-                });
-              }
-
-              logger.info("Batch approval approved and job created", {
-                approvalId,
-                jobId: job.id,
-                approvedBy: newApprovedBy,
-              });
-            } else {
-              // For all_must mode: not enough approvals yet, update the Slack card to show progress
-              logger.info("Approval recorded, waiting for more approvals", {
-                approvalId,
-                approvalMode,
-                approvalCount,
-                requiredApprovals,
-                approvedBy: newApprovedBy,
-              });
-
-              // Update Slack message to show approval progress
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                try {
-                  const progressText = `Approved by ${approvalCount}/${requiredApprovals}: ${newApprovedBy.map((id: string) => `<@${id}>`).join(", ")}`;
-                  await slackClient.chat.postEphemeral({
-                    channel: channelId,
-                    user: userId,
-                    text: `✓ Your approval recorded. ${progressText}`,
-                  });
-                } catch (updateErr) {
-                  logger.warn("Failed to send approval progress message", { approvalId, error: updateErr });
-                }
-              }
-            }
+            logger.info("Batch approval approved and execution started", {
+              approvalId,
+              approvedBy: newApprovedBy,
+              approvalCount,
+            });
           } catch (err) {
             recordError("interactions.approval_approve", err, { userId, approvalId });
             logger.error("Approval button handler failed", { userId, approvalId, error: err });
@@ -835,56 +823,15 @@ app.post("/api/slack/interactions", async (c) => {
 
         const rejectPromise = (async () => {
           try {
-            const { approvals } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-            const { isAdmin } = await import("./lib/permissions.js");
-
-            // First, fetch the current approval to check authorization and state
-            const approvalRows = await db
-              .select()
-              .from(approvals)
-              .where(eq(approvals.id, approvalId))
-              .limit(1);
-
-            const approval = approvalRows[0];
-            if (!approval) {
-              logger.error("Approval not found for rejection", { approvalId });
-              return;
-            }
-
-            // Check if approval is still pending
-            if (approval.status !== "pending") {
-              logger.warn("Rejection attempt on non-pending approval", { approvalId, status: approval.status, userId });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: `This approval has already been ${approval.status}.`,
-                });
-              }
-              return;
-            }
-
-            // Authorization check
-            const approverIds = approval.approverIds ?? [];
-            const isAuthorized = 
-              isAdmin(userId) || 
-              (approverIds.length === 0 ? isAdmin(userId) : approverIds.includes(userId));
-
-            if (!isAuthorized) {
-              logger.warn("Unauthorized rejection attempt", { approvalId, userId, approverIds });
-              const channelId = payload.channel?.id;
-              if (channelId) {
-                await slackClient.chat.postEphemeral({
-                  channel: channelId,
-                  user: userId,
-                  text: "You're not authorized to reject this.",
-                });
-              }
-              return;
-            }
+            const channelId = payload.channel?.id;
+            const approval = await loadAuthorizedPendingApproval({
+              approvalId,
+              userId,
+              channelId,
+              slackClient,
+              unauthorizedText: "You're not authorized to reject this.",
+            });
+            if (!approval) return;
 
             // Update approval status
             await db
@@ -1044,50 +991,6 @@ app.post("/api/slack/interactions", async (c) => {
       }
     }
 
-
-/** Extract credential value from modal state based on auth scheme */
-function extractCredentialValue(
-  values: Record<string, any> | undefined,
-  authScheme: "bearer" | "basic" | "header" | "query" | "oauth_client" | "google_service_account"
-): string | undefined {
-  if (authScheme === "oauth_client") {
-    const clientId = values?.cred_client_id_block?.cred_client_id?.value;
-    const clientSecret = values?.cred_client_secret_block?.cred_client_secret?.value;
-    const tokenUrl = values?.cred_token_url_block?.cred_token_url?.value;
-    if (clientId && clientSecret && tokenUrl) {
-      return JSON.stringify({ client_id: clientId, client_secret: clientSecret, token_url: tokenUrl });
-    }
-  } else if (authScheme === "basic") {
-    const username = values?.cred_username_block?.cred_username?.value;
-    const password = values?.cred_password_block?.cred_password?.value ?? "";
-    if (username) {
-      return JSON.stringify({ username, password });
-    }
-  } else if (authScheme === "header" || authScheme === "query") {
-    const key = values?.cred_key_block?.cred_key?.value;
-    const secret = values?.cred_secret_block?.cred_secret?.value;
-    if (key && secret) {
-      return JSON.stringify({ key, secret });
-    }
-  } else if (authScheme === "google_service_account") {
-    const jsonKey = values?.cred_gsa_json_block?.cred_gsa_json?.value;
-    const scopes = values?.cred_gsa_scopes_block?.cred_gsa_scopes?.value;
-    if (jsonKey) {
-      // Embed scopes into the JSON key so they're stored together
-      try {
-        const parsed = JSON.parse(jsonKey);
-        if (scopes) parsed.scopes = scopes;
-        return JSON.stringify(parsed);
-      } catch {
-        return undefined; // Invalid JSON -- validation will catch this
-      }
-    }
-  } else {
-    return values?.cred_value_block?.cred_value?.value;
-  }
-  return undefined;
-}
-
     if (callbackId === "api_credential_add_submit" && userId) {
       if (!isAdmin(userId)) return c.json({});
       const name = payload.view?.state?.values?.cred_name_block?.cred_name?.value;
@@ -1119,9 +1022,11 @@ function extractCredentialValue(
           } catch (err) {
             recordError("interactions.api_credential_add", err, { userId, name });
             try {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              const safeErrorMsg = value ? errorMsg.replaceAll(value, "[REDACTED]") : errorMsg;
               await slackClient.chat.postMessage({
                 channel: userId,
-                text: `Failed to save credential "${name}": ${err instanceof Error ? err.message : String(err)}`,
+                text: `Failed to save credential "${name}": ${safeErrorMsg}`,
               });
             } catch { /* best effort */ }
           }
@@ -1164,19 +1069,19 @@ function extractCredentialValue(
             const cred = creds.find((c) => c.id === credentialId);
             if (!cred) return;
 
-            const allowed = await hasPermission(cred.owner_id, cred.id, userId, "write");
+            const allowed = await hasPermission(cred.owner_user_id, cred.id, userId, "write");
             if (!allowed) {
               await slackClient.chat.postEphemeral({
                 channel: userId,
                 user: userId,
-                text: `Permission denied: you don't have write access to credential "${cred.name}".`,
+                text: `Permission denied: you don't have write access to credential "${cred.key}".`,
               });
               return;
             }
 
             const updatedCred = await storeApiCredential(
-              cred.owner_id,
-              cred.name,
+              cred.owner_user_id,
+              cred.key,
               value,
               cred.expires_at ?? undefined,
               authScheme,
@@ -1204,7 +1109,11 @@ function extractCredentialValue(
       if (credentialId && granteeId && permission) {
         const sharePromise = (async () => {
           try {
-            await grantApiCredentialAccess(credentialId, userId, granteeId, permission as "read" | "write" | "admin");
+            if (permission === "read") {
+              await addCredentialReader(credentialId, userId, granteeId);
+            } else if (permission === "write") {
+              await addCredentialWriter(credentialId, userId, granteeId);
+            }
             await publishHomeTab(slackClient, userId);
           } catch (err) {
             recordError("interactions.api_credential_share", err, { userId, credentialId });
@@ -1214,23 +1123,6 @@ function extractCredentialValue(
       }
     }
 
-    if (callbackId === "api_credential_permissions_submit" && userId) {
-      const credentialId = payload.view?.private_metadata;
-      const selectedOptions = payload.view?.state?.values?.methods_block?.methods_checkboxes?.selected_options ?? [];
-      const allowedMethods = selectedOptions.map((opt: any) => opt.value);
-
-      if (credentialId) {
-        const permissionsPromise = (async () => {
-          try {
-            await updateCredentialMethods(credentialId, userId, allowedMethods);
-            await publishHomeTab(slackClient, userId);
-          } catch (err) {
-            recordError("interactions.api_credential_permissions_update", err, { userId, credentialId });
-          }
-        })();
-        waitUntil(permissionsPromise);
-      }
-    }
 
     // Slack modals require empty response or response_action to close properly
     return c.json({ response_action: "clear" });

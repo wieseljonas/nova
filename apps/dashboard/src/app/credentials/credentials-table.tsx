@@ -15,13 +15,13 @@ import { Plus, Search } from "lucide-react";
 
 interface CredentialRow {
   id: string;
-  name: string;
+  key: string;
   authScheme: string;
-  ownerId: string;
+  ownerUserId: string;
   ownerName: string;
   expiresAt: Date | null;
   createdAt: Date;
-  grantCount: number;
+  accessCount: number;
 }
 
 interface Props {
@@ -36,10 +36,10 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState("");
+  const [newKey, setNewKey] = useState("");
   const [newAuthScheme, setNewAuthScheme] = useState("bearer");
   const [newValue, setNewValue] = useState("");
-  const [newOwnerId, setNewOwnerId] = useState("");
+  const [newOwnerUserId, setNewOwnerUserId] = useState("");
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
 
   function handleSearch(value: string) {
@@ -56,18 +56,18 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
   }
 
   async function handleCreate() {
-    if (!newName || !newValue || !newOwnerId) return;
+    if (!newKey || !newValue || !newOwnerUserId) return;
     await createCredential({
-      name: newName,
+      key: newKey,
       authScheme: newAuthScheme,
       value: newValue,
-      ownerId: newOwnerId,
+      ownerUserId: newOwnerUserId,
     });
     setShowCreate(false);
-    setNewName("");
+    setNewKey("");
     setNewAuthScheme("bearer");
     setNewValue("");
-    setNewOwnerId("");
+    setNewOwnerUserId("");
     router.refresh();
   }
 
@@ -91,10 +91,10 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead className="w-[80px]">Type</TableHead>
+            <TableHead>Key</TableHead>
+            <TableHead className="w-[80px]">Auth Scheme</TableHead>
             <TableHead className="w-[160px]">Owner</TableHead>
-            <TableHead className="w-[70px]">Grants</TableHead>
+            <TableHead className="w-[70px]">Access</TableHead>
             <TableHead className="w-[140px]">Expires</TableHead>
           </TableRow>
         </TableHeader>
@@ -103,12 +103,12 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
             <TableRow key={cred.id}>
               <TableCell>
                 <Link href={`/credentials/${cred.id}`} className="text-primary underline font-mono">
-                  {cred.name}
+                  {cred.key}
                 </Link>
               </TableCell>
               <TableCell><Badge variant="secondary">{cred.authScheme}</Badge></TableCell>
               <TableCell className="text-sm">{cred.ownerName}</TableCell>
-              <TableCell>{cred.grantCount}</TableCell>
+              <TableCell>{cred.accessCount}</TableCell>
               <TableCell className="text-muted-foreground text-sm">{formatDate(cred.expiresAt)}</TableCell>
             </TableRow>
           ))}
@@ -129,7 +129,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
           <DialogTitle>Add Credential</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <Input placeholder="Name (lowercase, underscores)" value={newName} onChange={(e) => setNewName(e.target.value)} />
+          <Input placeholder="Key (lowercase, underscores)" value={newKey} onChange={(e) => setNewKey(e.target.value)} />
           <select
             value={newAuthScheme}
             onChange={(e) => setNewAuthScheme(e.target.value)}
@@ -142,7 +142,7 @@ export function CredentialsTable({ credentials, total, page, pageSize }: Props) 
             <option value="oauth_client">OAuth Client</option>
             <option value="google_service_account">Google Service Account</option>
           </select>
-          <Input placeholder="Owner Slack User ID" value={newOwnerId} onChange={(e) => setNewOwnerId(e.target.value)} />
+          <Input placeholder="Owner Slack User ID" value={newOwnerUserId} onChange={(e) => setNewOwnerUserId(e.target.value)} />
           <Input type="password" placeholder="Value / Secret" value={newValue} onChange={(e) => setNewValue(e.target.value)} />
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>Cancel</Button>

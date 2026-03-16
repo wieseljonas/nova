@@ -372,6 +372,27 @@
       "when": 1774089600004,
       "tag": "0052_approval_credential_owner",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1774176000000,
+      "tag": "0053_simplify_credential_system",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1774262400000,
+      "tag": "0054_credential_live_authorization",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1774348800000,
+      "tag": "0055_remove_approval_mode_columns",
+      "breakpoints": true
     }
   ]
 }

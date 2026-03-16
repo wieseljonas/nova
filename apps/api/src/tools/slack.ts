@@ -3008,7 +3008,7 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
     // ── HTTP Request Tool (governed external API calls) ─────────────
     ...createHttpRequestTool(context),
 
-    // ── Approval System Tools (batch operations + policy management) ─
+    // ── Approval System Tools (batch operations) ─
     ...createApprovalTools(),
   };
 

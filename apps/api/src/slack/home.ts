@@ -5,7 +5,7 @@ import { logger } from "../lib/logger.js";
 import { getCredential, maskCredential } from "../lib/credentials.js";
 import {
   listApiCredentials,
-  listGrantsForCredentials,
+  listAccessForCredentials,
   getCredentialById,
   type AuthScheme,
 } from "../lib/api-credentials.js";
@@ -202,22 +202,22 @@ async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): 
   }
 
   const ownedCredIds = creds
-    .filter((c) => c.owner_id === userId)
+    .filter((c) => c.owner_user_id === userId)
     .map((c) => c.id);
-  const allGrants = await listGrantsForCredentials(ownedCredIds);
-  const grantsByCredId = new Map<
+  const allAccess = await listAccessForCredentials(ownedCredIds);
+  const accessByCredId = new Map<
     string,
-    Array<{ granteeId: string; permission: string; displayName: string | null }>
+    Array<{ userId: string; permission: string; displayName: string | null }>
   >();
-  for (const g of allGrants) {
-    const list = grantsByCredId.get(g.credentialId) ?? [];
-    list.push(g);
-    grantsByCredId.set(g.credentialId, list);
+  for (const a of allAccess) {
+    const list = accessByCredId.get(a.credentialId) ?? [];
+    list.push(a);
+    accessByCredId.set(a.credentialId, list);
   }
 
   for (const cred of creds) {
-    const isOwner = cred.owner_id === userId;
-    const source = isOwner ? "yours" : `shared by <@${cred.owner_id}>`;
+    const isOwner = cred.owner_user_id === userId;
+    const source = isOwner ? "yours" : `shared by <@${cred.owner_user_id}>`;
     const permLabel = isOwner ? "owner" : cred.permission;
 
     let expiryText = "";
@@ -229,18 +229,12 @@ async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): 
         : `  ·  expires ${expiresAt.toISOString().slice(0, 10)}`;
     }
 
-    const canWrite = isOwner || cred.permission === "write" || cred.permission === "admin";
+    const canWrite = isOwner || cred.permission === "write";
     const overflowOptions: any[] = [];
     if (canWrite) {
       overflowOptions.push({
         text: { type: "plain_text", text: "Update" },
         value: `api_credential_update_${cred.id}`,
-      });
-    }
-    if (isOwner) {
-      overflowOptions.push({
-        text: { type: "plain_text", text: "Permissions" },
-        value: `api_credential_permissions_${cred.id}`,
       });
     }
     if (isOwner) {
@@ -256,25 +250,24 @@ async function buildUserCredentialBlocks(userId: string, userIsAdmin: boolean): 
       );
     }
 
-    const grants = grantsByCredId.get(cred.id) ?? [];
-    if (grants.length > 0) {
+    const access = accessByCredId.get(cred.id) ?? [];
+    if (access.length > 0) {
       overflowOptions.push({
         text: { type: "plain_text", text: "View users" },
         value: `api_credential_access_${cred.id}`,
       });
     }
 
-    let methodsText = "";
-    if (cred.allowed_methods && cred.allowed_methods.length > 0) {
-      const methods = cred.allowed_methods.map(m => m.toUpperCase()).join(", ");
-      methodsText = `\nAllowed methods (skip approval): ${methods}`;
+    let approvalChannelText = "";
+    if (cred.approval_slack_channel_id) {
+      approvalChannelText = `\nApproval channel: <#${cred.approval_slack_channel_id}>`;
     }
 
     const section: any = {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${cred.name}*  ·  _${source}_ (${permLabel})${expiryText}${methodsText}`,
+        text: `*${cred.key}*  ·  _${source}_ (${permLabel})${expiryText}${approvalChannelText}`,
       },
     };
     if (overflowOptions.length > 0) {
@@ -638,7 +631,7 @@ export async function openShareCredentialModal(
                 value: "read",
                 description: {
                   type: "plain_text",
-                  text: "Can use the credential value",
+                  text: "Can use for GET requests only",
                 },
               },
               {
@@ -646,15 +639,7 @@ export async function openShareCredentialModal(
                 value: "write",
                 description: {
                   type: "plain_text",
-                  text: "Can use for write operations",
-                },
-              },
-              {
-                text: { type: "plain_text", text: "Admin" },
-                value: "admin",
-                description: {
-                  type: "plain_text",
-                  text: "Can re-share with others",
+                  text: "Can use for any HTTP method (needs approval for writes)",
                 },
               },
             ],
@@ -681,14 +666,14 @@ export async function openCredentialAccessModal(
   const cred = await getCredentialById(credentialId);
   if (!cred) return;
 
-  const grants = await listGrantsForCredentials([credentialId]);
+  const access = await listAccessForCredentials([credentialId]);
 
   const blocks: any[] = [
     {
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*${cred.name}*`,
+        text: `*${cred.key}*`,
       },
     },
     { type: "divider" },
@@ -696,18 +681,19 @@ export async function openCredentialAccessModal(
       type: "section",
       text: {
         type: "mrkdwn",
-        text: "👑 <@" + cred.ownerId + "> — *Owner*",
+        text: "👑 <@" + cred.ownerUserId + "> — *Owner*",
       },
     },
   ];
 
-  if (grants.length > 0) {
-    for (const grant of grants) {
+  if (access.length > 0) {
+    for (const item of access) {
+      const icon = item.permission === "write" ? "✍️" : "👁️";
       blocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "👤 <@" + grant.granteeId + "> — *" + grant.permission + "*",
+          text: `${icon} <@${item.userId}> — *${item.permission}*`,
         },
       });
     }
@@ -732,64 +718,6 @@ export async function openCredentialAccessModal(
   });
 }
 
-export async function openCredentialPermissionsModal(
-  client: WebClient,
-  triggerId: string,
-  credentialId: string,
-  credentialName: string,
-  currentMethods: string[] | null,
-): Promise<void> {
-  const allMethods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
-  const selected = (currentMethods ?? []).map(m => m.toUpperCase());
-
-  await client.views.open({
-    trigger_id: triggerId,
-    view: {
-      type: "modal",
-      callback_id: "api_credential_permissions_submit",
-      private_metadata: credentialId,
-      title: { type: "plain_text", text: "HTTP Permissions" },
-      submit: { type: "plain_text", text: "Save" },
-      close: { type: "plain_text", text: "Cancel" },
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `Configure HTTP methods that skip approval for *${credentialName}*`,
-          },
-        },
-        {
-          type: "input",
-          block_id: "methods_block",
-          label: { type: "plain_text", text: "Allowed Methods (skip approval)" },
-          optional: true,
-          element: {
-            type: "checkboxes",
-            action_id: "methods_checkboxes",
-            options: allMethods.map(method => ({
-              text: { type: "plain_text", text: method },
-              value: method,
-            })),
-            initial_options: selected.map(method => ({
-              text: { type: "plain_text", text: method },
-              value: method,
-            })),
-          },
-        },
-        {
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              text: "Requests with these methods will execute without approval. Other methods still require approval based on policy rules.",
-            },
-          ],
-        },
-      ],
-    },
-  });
-}
 
 /**
  * Open a modal for editing a credential value.
