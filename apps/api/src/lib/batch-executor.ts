@@ -5,6 +5,7 @@ import { approvals, approvalItems, type Approval } from "@aura/db/schema";
 import { injectCredentialAuth, type ResolvedCredentialAuth } from "./credential-auth.js";
 import { isPrivateUrl } from "./ssrf.js";
 import { logger } from "./logger.js";
+import { executionContext } from "./tool.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -355,6 +356,7 @@ export async function executeBatchProposal(args: {
       method: string;
       ok: boolean;
       status?: number;
+      body?: unknown;
       error?: string;
     }> = [];
 
@@ -410,6 +412,7 @@ export async function executeBatchProposal(args: {
         method: item.method,
         ok: executionResult.ok,
         status: executionResult.status,
+        body: executionResult.body,
         error: executionResult.error,
       });
 
@@ -464,32 +467,44 @@ export async function executeBatchProposal(args: {
     });
 
     // ── Post results back to the original conversation thread ──────────────
+    // Include response bodies so the LLM can continue processing with actual data.
     if (slackClient && approval.requestedInChannel && approval.requestedInThread) {
       try {
-        const MAX_MESSAGE_LENGTH = 3500;
+        const MAX_TOTAL = 38_000; // Slack limit is ~40K; leave headroom
+        const MAX_PER_ITEM = 4_000;
+
         const summaryHeader = failed > 0
           ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)`
           : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemRows.length} completed successfully`;
 
-        const resultLines: string[] = [];
+        const parts: string[] = [];
         let totalLength = summaryHeader.length;
 
         for (const r of itemResults) {
-          const line = r.ok
-            ? `• Item ${r.sequenceNum}: ${r.method} → ${r.status}`
-            : `• Item ${r.sequenceNum}: :x: ${r.error ?? `HTTP ${r.status}`}`;
+          let part: string;
+          if (r.ok && r.body !== undefined) {
+            const bodyStr = typeof r.body === "string" ? r.body : JSON.stringify(r.body, null, 2);
+            const truncatedBody = bodyStr.length > MAX_PER_ITEM
+              ? bodyStr.slice(0, MAX_PER_ITEM) + "\n… (truncated)"
+              : bodyStr;
+            part = `*Item ${r.sequenceNum}* (${r.method} → ${r.status}):\n\`\`\`\n${truncatedBody}\n\`\`\``;
+          } else if (r.ok) {
+            part = `*Item ${r.sequenceNum}*: ${r.method} → ${r.status} (empty response)`;
+          } else {
+            part = `*Item ${r.sequenceNum}*: :x: ${r.error ?? `HTTP ${r.status}`}`;
+          }
 
-          if (totalLength + line.length + 1 > MAX_MESSAGE_LENGTH) {
-            const remaining = itemResults.length - resultLines.length;
-            resultLines.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""}_`);
+          if (totalLength + part.length + 2 > MAX_TOTAL) {
+            const remaining = itemResults.length - parts.length;
+            parts.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""} (results stored in DB)_`);
             break;
           }
-          resultLines.push(line);
-          totalLength += line.length + 1;
+          parts.push(part);
+          totalLength += part.length + 2;
         }
 
-        const fullMessage = resultLines.length > 0
-          ? `${summaryHeader}\n\n${resultLines.join("\n")}`
+        const fullMessage = parts.length > 0
+          ? `${summaryHeader}\n\n${parts.join("\n\n")}`
           : summaryHeader;
 
         await slackClient.chat.postMessage({
@@ -503,6 +518,41 @@ export async function executeBatchProposal(args: {
           channel: approval.requestedInChannel,
           thread: approval.requestedInThread,
         });
+
+        // Re-invoke the pipeline so the LLM can continue processing with results.
+        // Constructs a synthetic event that looks like a user message in the thread —
+        // the pipeline loads thread context (which now includes results) and the LLM continues.
+        try {
+          const { runPipeline } = await import("../pipeline/index.js");
+          const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
+          const channelType = approval.requestedInChannel.startsWith("D") ? "im" : "channel";
+          const syntheticEvent = {
+            type: "message" as const,
+            channel: approval.requestedInChannel,
+            ts: `synthetic-continuation-${approvalId}-${Date.now()}`,
+            thread_ts: approval.requestedInThread,
+            text: `[Batch "${approval.title}" completed — results are in the thread above. Continue processing.]`,
+            user: approval.requestedBy,
+            channel_type: channelType,
+          };
+
+          await executionContext.run(
+            {
+              triggeredBy: approval.requestedBy,
+              triggerType: "user_message",
+              channelId: approval.requestedInChannel,
+              threadTs: approval.requestedInThread,
+            },
+            () => runPipeline({ event: syntheticEvent, client: slackClient, botUserId }),
+          );
+
+          logger.info("Auto-continuation pipeline completed", { approvalId });
+        } catch (continuationErr) {
+          logger.warn("Auto-continuation pipeline failed", {
+            approvalId,
+            error: continuationErr instanceof Error ? continuationErr.message : String(continuationErr),
+          });
+        }
       } catch (replyErr) {
         logger.warn("Failed to post results to original thread", {
           approvalId,
