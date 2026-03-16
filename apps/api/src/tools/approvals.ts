@@ -31,7 +31,7 @@ Returns a proposal_id that tracks the batch through approval and execution.`,
   inputSchema: z.object({
     title: z.string().describe("Short title for the batch operation (e.g. 'Update 50 leads to Qualified')"),
     description: z.string().optional().describe("Optional detailed description of what this batch will do"),
-    credential_name: z.string().optional().describe("API credential to use for all requests in the batch"),
+    credential_key: z.string().optional().describe("API credential key to use for all requests in the batch"),
     items: z.array(
       z.object({
         method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).describe("HTTP method"),
@@ -54,7 +54,8 @@ Returns a proposal_id that tracks the batch through approval and execution.`,
     const result = await createProposal({
       title: input.title,
       description: input.description,
-      credentialName: input.credential_name,
+      credentialKey: input.credential_key,
+      credentialOwner: input.credential_key ? ctx.triggeredBy : undefined,
       items: input.items as any,
       requestedBy: ctx.triggeredBy,
       requestedInChannel: ctx.channelId,
