@@ -708,29 +708,13 @@ app.post("/api/slack/interactions", async (c) => {
             }
 
             // Authorization check: look up credential live to determine approvers
-            let isAuthorized = isAdmin(userId);
-            
-            if (!isAuthorized && approval.credentialKey && approval.credentialOwner) {
-              const { credentials } = await import("@aura/db/schema");
-              const credRows = await db
-                .select()
-                .from(credentials)
-                .where(
-                  and(
-                    eq(credentials.key, approval.credentialKey),
-                    eq(credentials.ownerUserId, approval.credentialOwner)
-                  )
-                )
-                .limit(1);
-              
-              const credential = credRows[0];
-              if (credential) {
-                const isOwner = credential.ownerUserId === userId;
-                const writerIds = (credential.writerUserIds as string[]) ?? [];
-                const isWriter = writerIds.includes(userId);
-                isAuthorized = isOwner || isWriter;
-              }
-            }
+            const { isAuthorizedApprover } = await import("./lib/approval.js");
+            const credentialAuth = await isAuthorizedApprover(
+              approval.credentialKey,
+              approval.credentialOwner,
+              userId
+            );
+            const isAuthorized = isAdmin(userId) || credentialAuth;
 
             if (!isAuthorized) {
               logger.warn("Unauthorized approval attempt", { approvalId, userId, credentialKey: approval.credentialKey });
@@ -911,29 +895,13 @@ app.post("/api/slack/interactions", async (c) => {
             }
 
             // Authorization check: look up credential live to determine approvers
-            let isAuthorized = isAdmin(userId);
-            
-            if (!isAuthorized && approval.credentialKey && approval.credentialOwner) {
-              const { credentials } = await import("@aura/db/schema");
-              const credRows = await db
-                .select()
-                .from(credentials)
-                .where(
-                  and(
-                    eq(credentials.key, approval.credentialKey),
-                    eq(credentials.ownerUserId, approval.credentialOwner)
-                  )
-                )
-                .limit(1);
-              
-              const credential = credRows[0];
-              if (credential) {
-                const isOwner = credential.ownerUserId === userId;
-                const writerIds = (credential.writerUserIds as string[]) ?? [];
-                const isWriter = writerIds.includes(userId);
-                isAuthorized = isOwner || isWriter;
-              }
-            }
+            const { isAuthorizedApprover } = await import("./lib/approval.js");
+            const credentialAuth = await isAuthorizedApprover(
+              approval.credentialKey,
+              approval.credentialOwner,
+              userId
+            );
+            const isAuthorized = isAdmin(userId) || credentialAuth;
 
             if (!isAuthorized) {
               logger.warn("Unauthorized rejection attempt", { approvalId, userId, credentialKey: approval.credentialKey });
@@ -1137,9 +1105,11 @@ app.post("/api/slack/interactions", async (c) => {
           } catch (err) {
             recordError("interactions.api_credential_add", err, { userId, name });
             try {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              const safeErrorMsg = value ? errorMsg.replaceAll(value, "[REDACTED]") : errorMsg;
               await slackClient.chat.postMessage({
                 channel: userId,
-                text: `Failed to save credential "${name}": ${err instanceof Error ? err.message : String(err)}`,
+                text: `Failed to save credential "${name}": ${safeErrorMsg}`,
               });
             } catch { /* best effort */ }
           }

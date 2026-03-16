@@ -100,3 +100,36 @@ export async function getCredentialForApproval(
   
   return rows[0] ?? null;
 }
+
+/**
+ * Check if a user is authorized to approve/reject an approval.
+ * 
+ * Authorization logic:
+ * - If credential info is provided: checks if user is owner or writer of the credential
+ * - Otherwise: returns false (caller should fallback to admin check)
+ * 
+ * @param credentialKey The credential key (if credential-based approval)
+ * @param credentialOwner The credential owner user ID
+ * @param userId The user attempting the action
+ * @returns true if user is authorized, false otherwise
+ */
+export async function isAuthorizedApprover(
+  credentialKey: string | null | undefined,
+  credentialOwner: string | null | undefined,
+  userId: string
+): Promise<boolean> {
+  if (!credentialKey || !credentialOwner) {
+    return false;
+  }
+
+  const credential = await getCredentialForApproval(credentialKey, credentialOwner);
+  if (!credential) {
+    return false;
+  }
+
+  const isOwner = credential.ownerUserId === userId;
+  const writerIds = (credential.writerUserIds as string[]) ?? [];
+  const isWriter = writerIds.includes(userId);
+
+  return isOwner || isWriter;
+}
