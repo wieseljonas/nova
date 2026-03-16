@@ -59,7 +59,6 @@ export function Combobox({
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     setQuery(e.target.value);
-    onChange(e.target.value);
     if (!open) setOpen(true);
   }
 
