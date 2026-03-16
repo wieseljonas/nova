@@ -1,14 +1,14 @@
 "use server";
 
 import { db } from "@/lib/db";
-import { credentials, credentialGrants, credentialAuditLog, userProfiles } from "@schema";
+import { credentials, credentialAuditLog, userProfiles } from "@schema";
 import { eq, desc, count, ilike, sql } from "drizzle-orm";
 import { encryptCredential, decryptCredential, maskCredential } from "@/lib/credentials";
 import { revalidatePath } from "next/cache";
 
 export async function getCredentials(search?: string, page = 1, limit = 100) {
   const offset = (page - 1) * limit;
-  const where = search ? ilike(credentials.name, `%${search}%`) : undefined;
+  const where = search ? ilike(credentials.key, `%${search}%`) : undefined;
 
   const [{ value: total }] = await db
     .select({ value: sql<number>`count(*)::int` })
@@ -18,9 +18,11 @@ export async function getCredentials(search?: string, page = 1, limit = 100) {
   const creds = await db
     .select({
       id: credentials.id,
-      name: credentials.name,
+      key: credentials.key,
       authScheme: credentials.authScheme,
-      ownerId: credentials.ownerId,
+      ownerUserId: credentials.ownerUserId,
+      readerUserIds: credentials.readerUserIds,
+      writerUserIds: credentials.writerUserIds,
       expiresAt: credentials.expiresAt,
       createdAt: credentials.createdAt,
     })
@@ -32,20 +34,24 @@ export async function getCredentials(search?: string, page = 1, limit = 100) {
 
   const result = [];
   for (const cred of creds) {
-    const [grantCount] = await db
-      .select({ value: count() })
-      .from(credentialGrants)
-      .where(eq(credentialGrants.credentialId, cred.id));
+    const readerIds = (cred.readerUserIds as string[]) ?? [];
+    const writerIds = (cred.writerUserIds as string[]) ?? [];
+    const accessCount = readerIds.length + writerIds.length;
 
     const [owner] = await db
       .select({ displayName: userProfiles.displayName })
       .from(userProfiles)
-      .where(eq(userProfiles.slackUserId, cred.ownerId));
+      .where(eq(userProfiles.slackUserId, cred.ownerUserId));
 
     result.push({
-      ...cred,
-      grantCount: grantCount.value,
-      ownerName: owner?.displayName || cred.ownerId,
+      id: cred.id,
+      key: cred.key,
+      authScheme: cred.authScheme,
+      ownerUserId: cred.ownerUserId,
+      expiresAt: cred.expiresAt,
+      createdAt: cred.createdAt,
+      accessCount,
+      ownerName: owner?.displayName || cred.ownerUserId,
     });
   }
 
@@ -63,19 +69,26 @@ export async function getCredential(id: string) {
     maskedValue = "••••••••";
   }
 
-  const grants = await db
-    .select()
-    .from(credentialGrants)
-    .where(eq(credentialGrants.credentialId, id));
+  const readerIds = (cred.readerUserIds as string[]) ?? [];
+  const writerIds = (cred.writerUserIds as string[]) ?? [];
+  const allUserIds = [...readerIds, ...writerIds];
 
-  const granteeNames: Record<string, string> = {};
-  for (const g of grants) {
-    const [user] = await db
-      .select({ displayName: userProfiles.displayName })
+  const userNames: Record<string, string> = {};
+  if (allUserIds.length > 0) {
+    const users = await db
+      .select({ slackUserId: userProfiles.slackUserId, displayName: userProfiles.displayName })
       .from(userProfiles)
-      .where(eq(userProfiles.slackUserId, g.granteeId));
-    granteeNames[g.granteeId] = user?.displayName || g.granteeId;
+      .where(sql`${userProfiles.slackUserId} = ANY(${allUserIds})`);
+    
+    for (const user of users) {
+      userNames[user.slackUserId] = user.displayName ?? user.slackUserId;
+    }
   }
+
+  const access = [
+    ...readerIds.map(userId => ({ userId, permission: 'read' as const })),
+    ...writerIds.map(userId => ({ userId, permission: 'write' as const })),
+  ];
 
   const auditLog = await db
     .select()
@@ -87,22 +100,22 @@ export async function getCredential(id: string) {
   const [owner] = await db
     .select({ displayName: userProfiles.displayName })
     .from(userProfiles)
-    .where(eq(userProfiles.slackUserId, cred.ownerId));
+    .where(eq(userProfiles.slackUserId, cred.ownerUserId));
 
   return {
     ...cred,
     maskedValue,
-    ownerName: owner?.displayName || cred.ownerId,
-    grants,
-    granteeNames,
+    ownerName: owner?.displayName || cred.ownerUserId,
+    access,
+    userNames,
     auditLog,
   };
 }
 
 export async function createCredential(data: {
-  name: string;
+  key: string;
   authScheme: string;
-  ownerId: string;
+  ownerUserId: string;
   value: string;
   expiresAt?: string;
 }) {
@@ -110,9 +123,9 @@ export async function createCredential(data: {
   const [cred] = await db
     .insert(credentials)
     .values({
-      name: data.name,
+      key: data.key,
       authScheme: data.authScheme,
-      ownerId: data.ownerId,
+      ownerUserId: data.ownerUserId,
       value: encrypted,
       expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
     })
@@ -128,25 +141,6 @@ export async function updateCredentialValue(id: string, value: string) {
     .set({ value: encrypted, updatedAt: new Date() })
     .where(eq(credentials.id, id));
   revalidatePath(`/credentials/${id}`);
-}
-
-export async function grantCredentialAccess(credentialId: string, granteeId: string, permission: string, grantedBy: string) {
-  await db
-    .insert(credentialGrants)
-    .values({ credentialId, granteeId, permission, grantedBy })
-    .onConflictDoUpdate({
-      target: [credentialGrants.credentialId, credentialGrants.granteeId],
-      set: { permission, grantedBy, grantedAt: new Date(), revokedAt: null },
-    });
-  revalidatePath(`/credentials/${credentialId}`);
-}
-
-export async function revokeCredentialAccess(grantId: string, credentialId: string) {
-  await db
-    .update(credentialGrants)
-    .set({ revokedAt: new Date() })
-    .where(eq(credentialGrants.id, grantId));
-  revalidatePath(`/credentials/${credentialId}`);
 }
 
 export async function deleteCredential(id: string) {
