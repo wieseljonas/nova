@@ -20,6 +20,7 @@ import {
   updateCredentialAccessPermission,
   deleteCredential,
 } from "../actions";
+import { Combobox } from "@/components/ui/combobox";
 import { AuthSecretFields } from "../credential-secret-fields";
 import type { AuthScheme, SecretPayloadInput } from "../credential-secret";
 import { ArrowLeft, Trash2 } from "lucide-react";
@@ -46,7 +47,6 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
   const router = useRouter();
   const [showUpdateValue, setShowUpdateValue] = useState(false);
   const [actorUserId, setActorUserId] = useState(data.ownerUserId);
-  const [grantSearch, setGrantSearch] = useState("");
   const [grantUserId, setGrantUserId] = useState("");
   const [grantPermission, setGrantPermission] = useState<"read" | "write">("read");
   const [metadataDisplayName, setMetadataDisplayName] = useState(data.displayName ?? "");
@@ -65,15 +65,10 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
     Object.fromEntries(data.access.map((item) => [item.userId, item.permission])),
   );
 
-  const grantCandidates = data.knownUsers
+  const grantOptions = data.knownUsers
     .filter((user) => user.userId !== data.ownerUserId)
     .filter((user) => !data.access.some((entry) => entry.userId === user.userId))
-    .filter((user) => {
-      const query = grantSearch.trim().toLowerCase();
-      if (!query) return true;
-      return user.label.toLowerCase().includes(query) || user.userId.toLowerCase().includes(query);
-    })
-    .slice(0, 8);
+    .map((user) => ({ value: user.userId, label: user.label }));
 
   async function handleUpdateValue() {
     setError("");
@@ -205,7 +200,13 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
         <CardContent className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
           <div className="col-span-2">
             <span className="text-muted-foreground">Acting User ID (owner or writer)</span>
-            <Input value={actorUserId} onChange={(e) => setActorUserId(e.target.value)} className="mt-1" />
+            <Combobox
+              options={data.knownUsers.map((u) => ({ value: u.userId, label: u.label }))}
+              value={actorUserId}
+              onChange={setActorUserId}
+              placeholder="Select acting user"
+              className="mt-1"
+            />
           </div>
           <div>
             <span className="text-muted-foreground">Auth Scheme</span>
@@ -275,36 +276,12 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
         </TabsList>
 
         <TabsContent value="access">
-          <div className="mb-3 space-y-2">
-            <Input
-              placeholder="Search users by name or Slack ID"
-              value={grantSearch}
-              onChange={(e) => setGrantSearch(e.target.value)}
-            />
-            <div className="max-h-32 overflow-y-auto rounded-md border p-2">
-              {grantCandidates.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No matching users</p>
-              ) : (
-                <div className="space-y-1">
-                  {grantCandidates.map((user) => (
-                    <button
-                      key={user.userId}
-                      type="button"
-                      className="block w-full rounded px-2 py-1 text-left text-xs hover:bg-muted"
-                      onClick={() => setGrantUserId(user.userId)}
-                    >
-                      {user.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
           <div className="mb-3 grid grid-cols-3 gap-2">
-            <Input
-              placeholder="Selected user Slack ID"
+            <Combobox
+              options={grantOptions}
               value={grantUserId}
-              onChange={(e) => setGrantUserId(e.target.value)}
+              onChange={setGrantUserId}
+              placeholder="Search users by name or Slack ID"
             />
             <Select value={grantPermission} onChange={(e) => setGrantPermission(e.target.value as "read" | "write")}>
               <option value="read">Read</option>
