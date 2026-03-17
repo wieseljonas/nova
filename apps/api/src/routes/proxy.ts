@@ -35,12 +35,7 @@ proxyApp.all("/:credentialKey/*", async (c) => {
     return c.json({ ok: false, error: "Credential not allowed by token" }, 403);
   }
 
-  const basePrefix = `/proxy/${credentialKey}/`;
-  if (!c.req.path.startsWith(basePrefix)) {
-    return c.json({ ok: false, error: "Invalid proxy path" }, 400);
-  }
-
-  let targetUrl = c.req.path.slice(basePrefix.length);
+  let targetUrl = c.req.param("*");
   if (!targetUrl) {
     return c.json({ ok: false, error: "Missing target URL" }, 400);
   }

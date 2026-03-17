@@ -816,13 +816,20 @@ app.post("/api/slack/interactions", async (c) => {
 
             } else if (meta?.type === "http_request") {
               // ── HTTP request: execute inline ──
-              const credKey = meta.credentialKey as string;
-              const credOwner = meta.credentialOwner as string;
+              const credKey = approved.credentialKey;
+              const credOwner = approved.credentialOwner ?? approved.requestedBy;
               const method = meta.method as string;
               const url = meta.url as string;
 
-              const credential = await getApiCredentialWithType(credKey, credOwner, credOwner, "write");
-              if (!credential) {
+              if (!credKey) {
+                await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
+                cardColor = "#e01e5a";
+                cardIcon = "❌";
+                cardContext = `Failed · approved by <@${userId}>`;
+                resultText = `Failed: approval is missing credential metadata.`;
+              } else {
+                const credential = await getApiCredentialWithType(credKey, credOwner, credOwner, "write");
+                if (!credential) {
                 await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
                 cardColor = "#e01e5a";
                 cardIcon = "❌";
@@ -872,6 +879,7 @@ app.post("/api/slack/interactions", async (c) => {
                 resultText = response.ok
                   ? `Request approved and executed. HTTP ${response.status}. Response:\n${bodyPreview}`
                   : `Request approved but failed. HTTP ${response.status}. Response:\n${bodyPreview}`;
+              }
               }
 
             } else {
