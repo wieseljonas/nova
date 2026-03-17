@@ -52,13 +52,6 @@ NOVA_PROXY_URL and NOVA_PROXY_TOKEN environment variables.`,
     }
 
     const credentialOwner = input.credential_owner ?? ctx.triggeredBy;
-    if (credentialOwner !== ctx.triggeredBy) {
-      return {
-        ok: false,
-        error:
-          "credential_owner must match the requesting user for proxy sessions",
-      };
-    }
 
     const credential = await getCredentialForApproval(
       input.credential_key,

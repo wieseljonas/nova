@@ -108,23 +108,25 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
     logger.warn("Failed to query credentials for sandbox injection", { error: e.message });
   }
 
-  const proxyToken = await getSetting("proxy_session_token");
-  if (proxyToken) {
-    try {
-      const payload = verifyProxyToken(proxyToken);
-      const activeUserId = executionContext.getStore()?.triggeredBy;
-      if (!activeUserId || activeUserId === payload.userId) {
-        const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-        const baseUrl = productionHost
-          ? productionHost.startsWith("http")
-            ? productionHost
-            : `https://${productionHost}`
-          : "https://aura-alpha-five.vercel.app";
-        envs.NOVA_PROXY_URL = `${baseUrl.replace(/\/+$/, "")}/proxy`;
-        envs.NOVA_PROXY_TOKEN = proxyToken;
+  const activeUserId = executionContext.getStore()?.triggeredBy;
+  if (activeUserId) {
+    const proxyToken = await getSetting(`proxy_session_token:${activeUserId}`);
+    if (proxyToken) {
+      try {
+        const payload = verifyProxyToken(proxyToken);
+        if (activeUserId === payload.userId) {
+          const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+          const baseUrl = productionHost
+            ? productionHost.startsWith("http")
+              ? productionHost
+              : `https://${productionHost}`
+            : "https://aura-alpha-five.vercel.app";
+          envs.NOVA_PROXY_URL = `${baseUrl.replace(/\/+$/, "")}/proxy`;
+          envs.NOVA_PROXY_TOKEN = proxyToken;
+        }
+      } catch {
+        setSetting(`proxy_session_token:${activeUserId}`, "", "system").catch(() => {});
       }
-    } catch {
-      await setSetting("proxy_session_token", "", "system");
     }
   }
 

@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 interface ProxyTokenPayload {
   sub: string;
   creds: string[];
+  owner: string;
   iat: number;
   exp: number;
 }
@@ -10,6 +11,7 @@ interface ProxyTokenPayload {
 export function mintProxyToken(args: {
   credentialKeys: string[];
   userId: string;
+  credentialOwner: string;
   ttlMinutes?: number;
 }): string {
   const secret = process.env.CRON_SECRET;
@@ -24,6 +26,7 @@ export function mintProxyToken(args: {
   const payload: ProxyTokenPayload = {
     sub: args.userId,
     creds: args.credentialKeys,
+    owner: args.credentialOwner,
     iat: now,
     exp: now + ttlMinutes * 60,
   };
@@ -42,6 +45,7 @@ export function mintProxyToken(args: {
 export function verifyProxyToken(token: string): {
   credentialKeys: string[];
   userId: string;
+  credentialOwner: string;
 } {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
@@ -84,7 +88,8 @@ export function verifyProxyToken(token: string): {
     typeof payload.sub !== "string" ||
     !Array.isArray(payload.creds) ||
     payload.creds.some((c) => typeof c !== "string") ||
-    typeof payload.exp !== "number"
+    typeof payload.exp !== "number" ||
+    typeof payload.owner !== "string"
   ) {
     throw new Error("Invalid proxy token payload");
   }
@@ -97,6 +102,7 @@ export function verifyProxyToken(token: string): {
   return {
     credentialKeys: payload.creds,
     userId: payload.sub,
+    credentialOwner: payload.owner,
   };
 }
 
