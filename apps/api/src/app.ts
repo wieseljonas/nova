@@ -1076,6 +1076,9 @@ app.post("/api/slack/interactions", async (c) => {
               return;
             }
 
+            const credentialKey = approval.credentialKey;
+            const credentialOwner = approval.credentialOwner;
+
             const approvedRows = await db
               .update(approvals)
               .set({
@@ -1113,8 +1116,8 @@ app.post("/api/slack/interactions", async (c) => {
             }
 
             grants = mergeProxySessionGrant(grants, {
-              credentialKey: updatedApproval.credentialKey,
-              credentialOwner: updatedApproval.credentialOwner,
+              credentialKey,
+              credentialOwner,
             });
 
             const proxyToken = mintProxyToken({
@@ -1186,7 +1189,7 @@ app.post("/api/slack/interactions", async (c) => {
                 ts: `${(Date.now() / 1000).toFixed(6)}`,
                 thread_ts: updatedApproval.requestedInThread,
                 text:
-                  `Access to ${updatedApproval.credentialKey} granted. ` +
+                  `Access to ${credentialKey} granted. ` +
                   `Use NOVA_PROXY_URL and NOVA_PROXY_TOKEN in your sandbox scripts. ` +
                   `Token expires in ${ttlMinutes} minutes.`,
                 user: updatedApproval.requestedBy,
