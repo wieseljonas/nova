@@ -437,7 +437,8 @@ export async function executeBatchProposal(args: {
         // Only count 5xx server errors toward circuit breaker.
         // 4xx (400, 404, etc.) means the API understood the request and rejected it --
         // that's expected in bulk operations (e.g. already-deleted resources).
-        const isServerError = (executionResult.status ?? 0) >= 500;
+        // Network errors (no status) are treated as server errors.
+        const isServerError = executionResult.status === undefined || executionResult.status >= 500;
         recentFailures.push(isServerError);
       }
 
