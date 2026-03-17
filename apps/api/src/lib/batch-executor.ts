@@ -195,7 +195,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     const resp = await slackClient.chat.postMessage({
       ...(requestedInThread && { thread_ts: requestedInThread }),
       channel: targetChannel,
-      text: "",
+      text: `🔒 Approval required: ${title} — ${approverMentions}`,
       attachments: [
         {
           color: riskColor,
@@ -542,10 +542,12 @@ export async function executeBatchProposal(args: {
           },
         ];
 
+        const fullMessage = `${summaryHeader}\n\n${statusLines.join("\n")}`;
+
         await slackClient.chat.postMessage({
           channel: approval.requestedInChannel,
           thread_ts: approval.requestedInThread,
-          text: "",
+          text: fullMessage,
           attachments: [{ color: resultColor, blocks: resultBlocks }],
         });
 
@@ -779,7 +781,7 @@ async function updateApprovalCard(
     await slackClient.chat.update({
       channel: approval.slackChannel,
       ts: approval.slackMessageTs,
-      text: "",
+      text: `${statusEmoji} ${approval.title} — ${statusText}`,
       attachments: [
         {
           color,
