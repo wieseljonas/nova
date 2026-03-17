@@ -353,6 +353,7 @@ export async function executeBatchProposal(args: {
 
     let completed = 0;
     let failed = 0;
+    let skippedByCircuitBreaker = 0;
     const itemResults: Array<{
       sequenceNum: number;
       method: string;
@@ -382,6 +383,8 @@ export async function executeBatchProposal(args: {
             failed,
           });
           // Mark remaining items as skipped
+          const skippedCount = itemRows.length - i;
+          skippedByCircuitBreaker = skippedCount;
           await db
             .update(approvalItems)
             .set({ status: "skipped" })
@@ -431,7 +434,11 @@ export async function executeBatchProposal(args: {
         recentFailures.push(false);
       } else {
         failed++;
-        recentFailures.push(true);
+        // Only count 5xx server errors toward circuit breaker.
+        // 4xx (400, 404, etc.) means the API understood the request and rejected it --
+        // that's expected in bulk operations (e.g. already-deleted resources).
+        const isServerError = (executionResult.status ?? 0) >= 500;
+        recentFailures.push(isServerError);
       }
 
       // Trim circuit breaker window
@@ -483,8 +490,11 @@ export async function executeBatchProposal(args: {
         const MAX_TOTAL = 38_000; // Slack limit is ~40K; leave headroom
         const MAX_PER_ITEM = 4_000;
 
+        const circuitBreakerNote = skippedByCircuitBreaker > 0
+          ? `\n:octagonal_sign: *Circuit breaker tripped* — ${skippedByCircuitBreaker} item${skippedByCircuitBreaker > 1 ? "s" : ""} skipped after repeated 5xx server errors.`
+          : "";
         const summaryHeader = failed > 0
-          ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)`
+          ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)${circuitBreakerNote}`
           : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemRows.length} completed successfully`;
 
         const parts: string[] = [];
