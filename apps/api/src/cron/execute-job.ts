@@ -207,6 +207,8 @@ export async function executeJob(
         triggeredBy: job.requestedBy,
         triggerType: "scheduled_job",
         jobId: job.id,
+        channelId: job.channelId || undefined,
+        threadTs: job.threadTs || undefined,
       },
       () => agent.generate({ prompt }),
     );
