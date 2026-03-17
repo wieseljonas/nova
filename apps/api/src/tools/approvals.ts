@@ -81,6 +81,21 @@ NOVA_PROXY_URL and NOVA_PROXY_TOKEN environment variables.`,
     });
     const approvalTitle = `Proxy session access: ${input.credential_key}`;
 
+    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN || "");
+    const approvers = getApprovers(credential);
+    const approverMentions = approvers.map((id) => `<@${id}>`).join(", ");
+    const targetChannel =
+      credential.approvalSlackChannelId ??
+      ctx.channelId ??
+      process.env.AURA_DEFAULT_CHANNEL;
+
+    if (!targetChannel) {
+      return {
+        ok: false,
+        error: "No approval channel configured for this credential",
+      };
+    }
+
     const [approval] = await db
       .insert(approvals)
       .values({
@@ -98,20 +113,6 @@ NOVA_PROXY_URL and NOVA_PROXY_TOKEN environment variables.`,
       .returning({ id: approvals.id });
 
     const approvalId = approval.id;
-    const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN || "");
-    const approvers = getApprovers(credential);
-    const approverMentions = approvers.map((id) => `<@${id}>`).join(", ");
-    const targetChannel =
-      credential.approvalSlackChannelId ??
-      ctx.channelId ??
-      process.env.AURA_DEFAULT_CHANNEL;
-
-    if (!targetChannel) {
-      return {
-        ok: false,
-        error: "No approval channel configured for this credential",
-      };
-    }
 
     const post = await slackClient.chat.postMessage({
       channel: targetChannel,

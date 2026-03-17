@@ -38,7 +38,12 @@ export async function setSetting(
         set: { value, updatedBy, updatedAt: new Date() },
       });
 
-    logger.info("Setting updated", { key, value, updatedBy });
+    const isSensitive = key.includes("token") || key.includes("secret") || key.includes("password");
+    logger.info("Setting updated", { 
+      key, 
+      value: isSensitive ? "[REDACTED]" : value, 
+      updatedBy 
+    });
   } catch (error) {
     logger.error("Failed to write setting", { key, value, error });
     throw error;
