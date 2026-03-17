@@ -23,7 +23,7 @@ Use this when you need to make many API calls (bulk updates, imports, exports)
 that would be impractical as individual http_request calls.
 For a few one-off requests, use http_request instead (it handles governance per-request).
 After approval, NOVA_PROXY_URL and NOVA_PROXY_TOKEN are injected into the sandbox.
-Your script calls: curl -H "Authorization: Bearer $NOVA_PROXY_TOKEN" "$NOVA_PROXY_URL/{credential_key}/{full_target_url}"
+Your script calls: curl -H "X-Target-URL: https://api.example.com/endpoint" -H "Authorization: Bearer $NOVA_PROXY_TOKEN" "$NOVA_PROXY_URL/{credential_key}"
 The proxy injects the real credential server-side -- scripts never see the secret.`,
   inputSchema: z.object({
     credential_key: z
