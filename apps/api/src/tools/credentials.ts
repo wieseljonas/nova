@@ -12,7 +12,14 @@ export function createCredentialTools(context?: ScheduleContext) {
   return {
     get_credential: defineTool({
       description:
-        "Retrieve a stored API credential by name. Returns the decrypted value based on auth_scheme (bearer, basic, header, query, oauth_client). For oauth_client, automatically exchanges client credentials for a fresh access token using token_url stored inside the credential value. Permission checks and audit logging are automatic. Use this when a job or workflow needs an API key, token, or OAuth client credentials that the user has stored via the App Home.",
+        "Retrieve a stored API credential by name. Returns the decrypted value. " +
+        "IMPORTANT: Prefer http_request over this tool for external API calls -- " +
+        "http_request injects credentials server-side without exposing the secret to you, " +
+        "and enforces write governance (human approval). Only use get_credential when you " +
+        "need the raw value for non-HTTP use cases (e.g. passing a token to a CLI tool in " +
+        "the sandbox, or configuring a library that needs the key directly). " +
+        "For oauth_client, automatically exchanges client credentials for a fresh access token. " +
+        "Permission checks and audit logging are automatic.",
       inputSchema: z.object({
         name: z
           .string()

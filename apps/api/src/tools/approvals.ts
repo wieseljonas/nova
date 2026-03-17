@@ -18,11 +18,13 @@ export function createApprovalTools() {
 // ── request_credential_access ────────────────────────────────────────────────
 
 export const requestCredentialAccess = defineTool({
-  description: `Request write access to a credential for use in sandbox scripts.
+  description: `Request a proxy session to use a credential in sandbox scripts.
 Use this when you need to make many API calls (bulk updates, imports, exports)
 that would be impractical as individual http_request calls.
-After approval, the credential becomes available in the sandbox via
-NOVA_PROXY_URL and NOVA_PROXY_TOKEN environment variables.`,
+For a few one-off requests, use http_request instead (it handles governance per-request).
+After approval, NOVA_PROXY_URL and NOVA_PROXY_TOKEN are injected into the sandbox.
+Your script calls: curl -H "Authorization: Bearer $NOVA_PROXY_TOKEN" "$NOVA_PROXY_URL/{credential_key}/{full_target_url}"
+The proxy injects the real credential server-side -- scripts never see the secret.`,
   inputSchema: z.object({
     credential_key: z
       .string()

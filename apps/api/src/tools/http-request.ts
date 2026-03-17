@@ -24,12 +24,17 @@ export function createHttpRequestTool(context?: ScheduleContext) {
     http_request: defineTool({
       description:
         "Make a credentialed HTTP request to an external API. " +
-        "The credential is injected server-side -- the LLM never sees the key value. " +
-        "Use this for all external API calls that require stored credentials. " +
+        "The credential is injected server-side -- you never see the key value. " +
+        "This is the primary tool for all external API calls that require stored credentials. " +
         "Specify credential_name (e.g. 'close_fr') and credential_owner (Slack user ID) " +
-        "to inject auth. The server resolves the credential from the encrypted store and " +
-        "sets the Authorization header. You CANNOT pass Authorization, x-api-key, or " +
+        "to inject auth. You CANNOT pass Authorization, x-api-key, or " +
         "x-auth-token headers directly -- use credential_name instead. " +
+        "GOVERNANCE: Read requests (GET) execute immediately. Write requests (POST/PUT/PATCH/DELETE) " +
+        "require human approval -- a Slack card is posted and you'll get an 'awaiting_approval' " +
+        "response. The request executes automatically once approved. Include a 'reason' field " +
+        "to help the reviewer understand the request. " +
+        "For bulk operations (many API calls), use request_credential_access instead to get " +
+        "a proxy session and run a script in the sandbox. " +
         "Responses larger than 100KB are automatically saved to a sandbox file; " +
         "check the `truncated` field and use `run_command` with jq/python on the returned `path` to process.",
       inputSchema: z.object({
