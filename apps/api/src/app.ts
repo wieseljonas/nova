@@ -830,56 +830,56 @@ app.post("/api/slack/interactions", async (c) => {
               } else {
                 const credential = await getApiCredentialWithType(credKey, credOwner, credOwner, "write");
                 if (!credential) {
-                await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
-                cardColor = "#e01e5a";
-                cardIcon = "❌";
-                cardContext = `Failed · approved by <@${userId}>`;
-                resultText = `Failed: credential "${credKey}" not found or expired.`;
-              } else if (await isPrivateUrl(url)) {
-                await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
-                cardColor = "#e01e5a";
-                cardIcon = "❌";
-                cardContext = `Blocked · approved by <@${userId}>`;
-                resultText = `Blocked: URL resolves to a private/internal address.`;
-              } else {
-                const injected = injectCredentialAuth(url, (meta.headers as Record<string, string>) ?? {}, {
-                  authScheme: credential.authScheme,
-                  value: credential.value,
-                });
-                const headers = injected.headers;
-                if (meta.body && method !== "GET" && method !== "HEAD" && !Object.keys(headers).some(k => k.toLowerCase() === "content-type")) {
-                  headers["Content-Type"] = "application/json";
+                  await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
+                  cardColor = "#e01e5a";
+                  cardIcon = "❌";
+                  cardContext = `Failed · approved by <@${userId}>`;
+                  resultText = `Failed: credential "${credKey}" not found or expired.`;
+                } else if (await isPrivateUrl(url)) {
+                  await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
+                  cardColor = "#e01e5a";
+                  cardIcon = "❌";
+                  cardContext = `Blocked · approved by <@${userId}>`;
+                  resultText = `Blocked: URL resolves to a private/internal address.`;
+                } else {
+                  const injected = injectCredentialAuth(url, (meta.headers as Record<string, string>) ?? {}, {
+                    authScheme: credential.authScheme,
+                    value: credential.value,
+                  });
+                  const headers = injected.headers;
+                  if (meta.body && method !== "GET" && method !== "HEAD" && !Object.keys(headers).some(k => k.toLowerCase() === "content-type")) {
+                    headers["Content-Type"] = "application/json";
+                  }
+
+                  const response = await fetch(injected.url, {
+                    method,
+                    headers,
+                    body: meta.body ? (typeof meta.body === "string" ? meta.body : JSON.stringify(meta.body)) : undefined,
+                    redirect: "manual",
+                  });
+                  const responseText = await response.text();
+                  let responseBody: any = responseText;
+                  try { responseBody = JSON.parse(responseText); } catch { /* keep as text */ }
+
+                  auditCredentialHttpUse(
+                    credential.id, credKey, credOwner,
+                    { method, url, headers: meta.headers, body: meta.body },
+                    { status: response.status, body: responseBody },
+                  ).catch(() => {});
+
+                  const finalStatus = response.ok ? "completed" : "failed";
+                  await db.update(approvals).set({
+                    status: finalStatus, completedItems: response.ok ? 1 : 0, failedItems: response.ok ? 0 : 1, updatedAt: new Date(),
+                  }).where(eq(approvals.id, approvalId));
+
+                  cardColor = response.ok ? "#2eb67d" : "#e01e5a";
+                  cardIcon = response.ok ? "✅" : "❌";
+                  cardContext = `${cardIcon} HTTP ${response.status} · approved by <@${userId}>`;
+                  const bodyPreview = JSON.stringify(responseBody).slice(0, 5000);
+                  resultText = response.ok
+                    ? `Request approved and executed. HTTP ${response.status}. Response:\n${bodyPreview}`
+                    : `Request approved but failed. HTTP ${response.status}. Response:\n${bodyPreview}`;
                 }
-
-                const response = await fetch(injected.url, {
-                  method,
-                  headers,
-                  body: meta.body ? (typeof meta.body === "string" ? meta.body : JSON.stringify(meta.body)) : undefined,
-                  redirect: "manual",
-                });
-                const responseText = await response.text();
-                let responseBody: any = responseText;
-                try { responseBody = JSON.parse(responseText); } catch { /* keep as text */ }
-
-                auditCredentialHttpUse(
-                  credential.id, credKey, credOwner,
-                  { method, url, headers: meta.headers, body: meta.body },
-                  { status: response.status, body: responseBody },
-                ).catch(() => {});
-
-                const finalStatus = response.ok ? "completed" : "failed";
-                await db.update(approvals).set({
-                  status: finalStatus, completedItems: response.ok ? 1 : 0, failedItems: response.ok ? 0 : 1, updatedAt: new Date(),
-                }).where(eq(approvals.id, approvalId));
-
-                cardColor = response.ok ? "#2eb67d" : "#e01e5a";
-                cardIcon = response.ok ? "✅" : "❌";
-                cardContext = `${cardIcon} HTTP ${response.status} · approved by <@${userId}>`;
-                const bodyPreview = JSON.stringify(responseBody).slice(0, 5000);
-                resultText = response.ok
-                  ? `Request approved and executed. HTTP ${response.status}. Response:\n${bodyPreview}`
-                  : `Request approved but failed. HTTP ${response.status}. Response:\n${bodyPreview}`;
-              }
               }
 
             } else {

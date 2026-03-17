@@ -9,7 +9,7 @@ import { credentialAuditLog } from "@aura/db/schema";
 
 export const proxyApp = new Hono();
 
-proxyApp.all("/:credentialKey/*", async (c) => {
+proxyApp.all("/:credentialKey/:targetUrl{.+}", async (c) => {
   const credentialKey = c.req.param("credentialKey");
   if (!credentialKey) {
     return c.json({ ok: false, error: "Missing credential key" }, 400);
@@ -35,7 +35,7 @@ proxyApp.all("/:credentialKey/*", async (c) => {
     return c.json({ ok: false, error: "Credential not allowed by token" }, 403);
   }
 
-  let targetUrl = c.req.param("*");
+  let targetUrl = c.req.param("targetUrl");
   if (!targetUrl) {
     return c.json({ ok: false, error: "Missing target URL" }, 400);
   }
