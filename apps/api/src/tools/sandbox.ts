@@ -20,7 +20,7 @@ export function createSandboxTools(context?: ScheduleContext) {
   return {
     run_command: defineTool({
       description:
-        "Execute a shell command in a sandboxed Linux VM. This is the universal primitive for computation: file ops, git, code execution (node, python), search (rg, grep), data processing (curl, jq), and self-modification via Claude Code (claude). Pre-installed: git, node, python, gh, gcloud, vercel CLI, ripgrep, curl, jq, claude. Install more with apt-get or pip. The sandbox persists between conversations — files and state are preserved across messages. Output is truncated; use head, tail, grep to filter. Break complex tasks into smaller commands. For complex workflows, check your skill notes first. Use higher timeouts (up to 750s) for long-running agent commands like Claude Code — the 750s ceiling leaves a 50s buffer before the Vercel function timeout at 800s.",
+        "Execute a shell command in a sandboxed Linux VM. This is the universal primitive for computation: file ops, git, code execution (node, python), search (rg, grep), data processing (curl, jq), and self-modification via Claude Code (claude). Pre-installed: git, node, python, gh, gcloud, vercel CLI, ripgrep, curl, jq, claude. Install more with apt-get or pip. The sandbox persists between conversations — files and state are preserved across messages. When NOVA_PROXY_URL and NOVA_PROXY_TOKEN are available after credential access approval, scripts can make authenticated API calls directly through the proxy without exposing raw credentials in the sandbox. Output is truncated; use head, tail, grep to filter. Break complex tasks into smaller commands. For complex workflows, check your skill notes first. Use higher timeouts (up to 750s) for long-running agent commands like Claude Code — the 750s ceiling leaves a 50s buffer before the Vercel function timeout at 800s.",
       inputSchema: z.object({
         command: z
           .string()
@@ -59,8 +59,8 @@ export function createSandboxTools(context?: ScheduleContext) {
         }
 
         try {
-          const sandbox = await getOrCreateSandbox();
-          const envs = await getSandboxEnvs();
+          const sandbox = await getOrCreateSandbox(context?.userId);
+          const envs = await getSandboxEnvs(context?.userId);
 
           logger.info("run_command tool: executing", {
             command: command.substring(0, 100),

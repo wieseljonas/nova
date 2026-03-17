@@ -38,9 +38,18 @@ export async function setSetting(
         set: { value, updatedBy, updatedAt: new Date() },
       });
 
-    logger.info("Setting updated", { key, value, updatedBy });
+    logger.info("Setting updated", {
+      key,
+      updatedBy,
+      valueLength: value.length,
+    });
   } catch (error) {
-    logger.error("Failed to write setting", { key, value, error });
+    logger.error("Failed to write setting", {
+      key,
+      updatedBy,
+      valueLength: value.length,
+      error,
+    });
     throw error;
   }
 }

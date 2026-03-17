@@ -752,8 +752,43 @@ export async function auditCredentialHttpUse(
   httpRequest: { method: string; url: string; headers?: Record<string, string>; body?: unknown },
   httpResponse: { status?: number; headers?: Record<string, string>; body?: unknown; error?: string },
 ): Promise<void> {
+  await auditCredentialNetworkUse(
+    "http_request",
+    credentialId,
+    credentialName,
+    accessedBy,
+    httpRequest,
+    httpResponse,
+  );
+}
+
+export async function auditCredentialProxyUse(
+  credentialId: string,
+  credentialName: string,
+  accessedBy: string,
+  httpRequest: { method: string; url: string; headers?: Record<string, string>; body?: unknown },
+  httpResponse: { status?: number; headers?: Record<string, string>; body?: unknown; error?: string },
+): Promise<void> {
+  await auditCredentialNetworkUse(
+    "proxy",
+    credentialId,
+    credentialName,
+    accessedBy,
+    httpRequest,
+    httpResponse,
+  );
+}
+
+async function auditCredentialNetworkUse(
+  source: "http_request" | "proxy",
+  credentialId: string,
+  credentialName: string,
+  accessedBy: string,
+  httpRequest: { method: string; url: string; headers?: Record<string, string>; body?: unknown },
+  httpResponse: { status?: number; headers?: Record<string, string>; body?: unknown; error?: string },
+): Promise<void> {
   await audit(credentialId, credentialName, accessedBy, "use", JSON.stringify({
-    source: "http_request",
+    source,
     request: {
       method: httpRequest.method,
       url: httpRequest.url,

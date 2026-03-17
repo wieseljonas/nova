@@ -1,6 +1,12 @@
 import * as nodePath from "node:path";
 import { getSetting, setSetting } from "./settings.js";
 import { getCredential, decryptCredential } from "./credentials.js";
+import {
+  getProxyBaseUrl,
+  getProxySessionGrantsSettingKey,
+  getProxySessionTokenSettingKey,
+  verifyProxyToken,
+} from "./proxy-token.js";
 import { db } from "../db/client.js";
 import { credentials } from "@aura/db/schema";
 import { isNotNull } from "drizzle-orm";
@@ -50,9 +56,12 @@ async function loadE2B() {
  * GOVERNANCE: Only compute-infrastructure keys belong here. External
  * service API keys (Close, Stripe, PostHog, Claap, etc.) must be
  * accessed via the credentials table through the governed http_request
- * tool. This prevents run_command from bypassing the governance layer.
+ * tool or the approved proxy session path. This prevents run_command
+ * from bypassing the governance layer with raw credentials.
  */
-export async function getSandboxEnvs(): Promise<Record<string, string>> {
+export async function getSandboxEnvs(
+  userId?: string,
+): Promise<Record<string, string>> {
   const envs: Record<string, string> = {};
   const ghToken = await getCredential("github_token");
   if (ghToken) {
@@ -104,6 +113,21 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
     }
   } catch (e: any) {
     logger.warn("Failed to query credentials for sandbox injection", { error: e.message });
+  }
+
+  if (userId) {
+    const proxyTokenKey = getProxySessionTokenSettingKey(userId);
+    const proxyToken = await getSetting(proxyTokenKey);
+    if (proxyToken) {
+      try {
+        verifyProxyToken(proxyToken);
+        envs.NOVA_PROXY_URL = getProxyBaseUrl();
+        envs.NOVA_PROXY_TOKEN = proxyToken;
+      } catch {
+        await setSetting(proxyTokenKey, "", "system");
+        await setSetting(getProxySessionGrantsSettingKey(userId), "[]", "system");
+      }
+    }
   }
 
   return envs;
@@ -178,7 +202,7 @@ async function setupSandboxFilesystem(
  * Get or create a sandbox. Tries to resume a previously paused sandbox,
  * creates a new one if none exists or resume fails.
  */
-export async function getOrCreateSandbox(): Promise<any> {
+export async function getOrCreateSandbox(userId?: string): Promise<any> {
   // Return cached instance within the same invocation
   if (cachedSandbox) {
     try {
@@ -198,7 +222,7 @@ export async function getOrCreateSandbox(): Promise<any> {
   }
 
   const Sandbox = await loadE2B();
-  const envs = await getSandboxEnvs();
+  const envs = await getSandboxEnvs(userId);
 
   // Try to resume a previously paused sandbox
   const savedId = await getSetting(SANDBOX_NOTE_KEY);
