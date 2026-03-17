@@ -81,6 +81,9 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
   if (saKeyB64) {
     envs.GOOGLE_SA_KEY_B64 = saKeyB64;
   }
+  if (process.env.GCS_BUCKET_NAME) {
+    envs.GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME;
+  }
 
   try {
     const rows = await db
@@ -107,7 +110,8 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
 }
 
 /**
- * Mount the GCS bucket `gs://aura-files` at `/mnt/aura-files`.
+ * Mount the GCS bucket at `/mnt/gcs`.
+ * Reads bucket name from GCS_BUCKET_NAME env var.
  * Installs gcsfuse if needed and uses the base64-encoded SA key from envs.
  * Non-fatal -- sandbox works fine without the mount.
  */
@@ -116,8 +120,16 @@ async function setupSandboxFilesystem(
   envs: Record<string, string>,
 ): Promise<void> {
   try {
+    const bucketName = envs.GCS_BUCKET_NAME || process.env.GCS_BUCKET_NAME;
+    const mountPath = "/mnt/gcs";
+
+    if (!bucketName) {
+      logger.info("Skipping GCS mount — GCS_BUCKET_NAME not set");
+      return;
+    }
+
     const mountCheck = await sandbox.commands.run(
-      "mountpoint -q /mnt/aura-files && echo mounted || echo not",
+      `mountpoint -q ${mountPath} && echo mounted || echo not`,
       { timeoutMs: 5_000, envs },
     );
     if (mountCheck.stdout?.trim() === "mounted") return;
@@ -146,7 +158,7 @@ async function setupSandboxFilesystem(
     }
 
     const mountResult = await sandbox.commands.run(
-      `touch /tmp/gcs-sa-key.json && chmod 600 /tmp/gcs-sa-key.json && echo "$GOOGLE_SA_KEY_B64" | base64 -d > /tmp/gcs-sa-key.json && sudo mkdir -p /mnt/aura-files && gcsfuse --key-file=/tmp/gcs-sa-key.json --implicit-dirs aura-files /mnt/aura-files; EXIT=$?; rm -f /tmp/gcs-sa-key.json; exit $EXIT`,
+      `touch /tmp/gcs-sa-key.json && chmod 600 /tmp/gcs-sa-key.json && echo "$GOOGLE_SA_KEY_B64" | base64 -d > /tmp/gcs-sa-key.json && sudo mkdir -p ${mountPath} && gcsfuse --key-file=/tmp/gcs-sa-key.json --implicit-dirs ${bucketName} ${mountPath}; EXIT=$?; rm -f /tmp/gcs-sa-key.json; exit $EXIT`,
       { timeoutMs: 30_000, envs },
     );
     if (mountResult.exitCode !== 0) {
@@ -156,7 +168,7 @@ async function setupSandboxFilesystem(
       });
       return;
     }
-    logger.info("GCS bucket mounted at /mnt/aura-files");
+    logger.info(`GCS bucket gs://${bucketName} mounted at ${mountPath}`);
   } catch (error: any) {
     logger.warn("Failed to mount GCS bucket", { error: error.message });
   }
