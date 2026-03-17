@@ -3,28 +3,11 @@ import { waitUntil } from "@vercel/functions";
 import { verifyProxyToken } from "../lib/proxy-token.js";
 import { injectCredentialAuth } from "../lib/credential-auth.js";
 import { isPrivateUrl } from "../lib/ssrf.js";
-import { getApiCredentialWithType } from "../lib/api-credentials.js";
+import { getApiCredentialWithType, sanitizeHeaders } from "../lib/api-credentials.js";
 import { db } from "../db/client.js";
 import { credentialAuditLog } from "@aura/db/schema";
 
 export const proxyApp = new Hono();
-
-function sanitizeProxyHeaders(
-  headers: Record<string, string>,
-): Record<string, string> {
-  const sensitive = new Set([
-    "authorization",
-    "x-api-key",
-    "x-auth-token",
-    "cookie",
-    "set-cookie",
-  ]);
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(headers)) {
-    out[k] = sensitive.has(k.toLowerCase()) ? "[REDACTED]" : v;
-  }
-  return out;
-}
 
 proxyApp.all("/:credentialKey/*", async (c) => {
   const credentialKey = c.req.param("credentialKey");
@@ -143,7 +126,7 @@ proxyApp.all("/:credentialKey/*", async (c) => {
             request: {
               method,
               url: targetUrl,
-              headers: sanitizeProxyHeaders(inboundHeaders),
+              headers: sanitizeHeaders(inboundHeaders),
             },
             response: { error: errorMessage },
           }),
@@ -166,11 +149,11 @@ proxyApp.all("/:credentialKey/*", async (c) => {
           request: {
             method,
             url: targetUrl,
-            headers: sanitizeProxyHeaders(inboundHeaders),
+            headers: sanitizeHeaders(inboundHeaders),
           },
           response: {
             status: upstreamResponse.status,
-            headers: sanitizeProxyHeaders(
+            headers: sanitizeHeaders(
               Object.fromEntries(upstreamResponse.headers.entries()),
             ),
           },
