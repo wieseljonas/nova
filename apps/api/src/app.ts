@@ -25,7 +25,6 @@ import {
   addCredentialReader,
   addCredentialWriter,
   listApiCredentials,
-  listAccessForCredentials,
   hasPermission,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";

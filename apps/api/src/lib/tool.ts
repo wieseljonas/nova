@@ -138,6 +138,15 @@ export function defineTool<TInput, TOutput>(config: {
           const shortPath = urlPath.length > 60 ? urlPath.slice(0, 57) + "..." : urlPath;
           const approvalTitle = `${method} ${shortPath} via ${credentialName}`;
 
+          const approverIds = getApprovers(credential);
+          const approverMentions = approverIds.map((id) => `<@${id}>`).join(", ");
+          const approvalChannel = getApprovalChannel(credential);
+          const targetChannel = approvalChannel ?? ctx.channelId ?? process.env.AURA_DEFAULT_CHANNEL;
+
+          if (!targetChannel) {
+            throw new Error("No approval channel configured for this credential");
+          }
+
           const approvalMetadata = JSON.stringify({
             type: "http_request",
             method,
@@ -166,51 +175,44 @@ export function defineTool<TInput, TOutput>(config: {
             .returning({ id: approvals.id });
 
           const approvalId = approval.id;
-          const approverIds = getApprovers(credential);
-          const approverMentions = approverIds.map((id) => `<@${id}>`).join(", ");
-          const approvalChannel = getApprovalChannel(credential);
-          const targetChannel = approvalChannel ?? ctx.channelId ?? process.env.AURA_DEFAULT_CHANNEL;
-
-          if (targetChannel) {
-            const bodyPreview = httpInput.body
-              ? JSON.stringify(httpInput.body).slice(0, 500)
-              : null;
-            const descLines = [
-              reason ?? `\`${method}\` ${url}`,
-              `• Credential: \`${credentialName}\``,
-            ];
-            if (bodyPreview) {
-              descLines.push(`• Body: \`${bodyPreview}${bodyPreview.length >= 500 ? "…" : ""}\``);
-            }
-
-            const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
-            const resp = await slackClient.chat.postMessage({
-              channel: targetChannel,
-              ...(ctx.threadTs ? { thread_ts: ctx.threadTs } : {}),
-              text: "",
-              attachments: [{
-                color: "#e8912d",
-                blocks: [
-                  { type: "section", text: { type: "mrkdwn", text: `*🔒 ${approvalTitle}*` } },
-                  { type: "section", text: { type: "mrkdwn", text: descLines.join("\n") } },
-                  {
-                    type: "actions",
-                    elements: [
-                      { type: "button", text: { type: "plain_text", text: "✅ Approve", emoji: true }, style: "primary", action_id: `approval_approve_${approvalId}`, value: approvalId },
-                      { type: "button", text: { type: "plain_text", text: "❌ Reject", emoji: true }, style: "danger", action_id: `approval_reject_${approvalId}`, value: approvalId },
-                    ],
-                  },
-                  { type: "context", elements: [{ type: "mrkdwn", text: `\`write\` · requested by <@${ctx.triggeredBy}> · ${approverMentions || "admins"}` }] },
-                ],
-              }],
-              metadata: { event_type: "approval_request", event_payload: { approval_id: approvalId } },
-            });
-
-            await db
-              .update(approvals)
-              .set({ slackMessageTs: resp.ts ?? "", slackChannel: resp.channel ?? targetChannel })
-              .where(eq(approvals.id, approvalId));
+          const bodyPreview = httpInput.body
+            ? JSON.stringify(httpInput.body).slice(0, 500)
+            : null;
+          const descLines = [
+            reason ?? `\`${method}\` ${url}`,
+            `• Credential: \`${credentialName}\``,
+          ];
+          if (bodyPreview) {
+            descLines.push(`• Body: \`${bodyPreview}${bodyPreview.length >= 500 ? "…" : ""}\``);
           }
+
+          const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+          const resp = await slackClient.chat.postMessage({
+            channel: targetChannel,
+            ...(ctx.threadTs ? { thread_ts: ctx.threadTs } : {}),
+            text: "",
+            attachments: [{
+              color: "#e8912d",
+              blocks: [
+                { type: "section", text: { type: "mrkdwn", text: `*🔒 ${approvalTitle}*` } },
+                { type: "section", text: { type: "mrkdwn", text: descLines.join("\n") } },
+                {
+                  type: "actions",
+                  elements: [
+                    { type: "button", text: { type: "plain_text", text: "✅ Approve", emoji: true }, style: "primary", action_id: `approval_approve_${approvalId}`, value: approvalId },
+                    { type: "button", text: { type: "plain_text", text: "❌ Reject", emoji: true }, style: "danger", action_id: `approval_reject_${approvalId}`, value: approvalId },
+                  ],
+                },
+                { type: "context", elements: [{ type: "mrkdwn", text: `\`write\` · requested by <@${ctx.triggeredBy}> · ${approverMentions || "admins"}` }] },
+              ],
+            }],
+            metadata: { event_type: "approval_request", event_payload: { approval_id: approvalId } },
+          });
+
+          await db
+            .update(approvals)
+            .set({ slackMessageTs: resp.ts ?? "", slackChannel: resp.channel ?? targetChannel })
+            .where(eq(approvals.id, approvalId));
 
           return {
             status: "awaiting_approval",
