@@ -33,6 +33,7 @@ Returns a proposal_id that tracks the batch through approval and execution.`,
     description: z.string().optional().describe("Optional detailed description of what this batch will do"),
     credential_key: z.string().optional().describe("API credential key to use for all requests in the batch"),
     credential_owner: z.string().optional().describe("Slack user ID of the credential owner"),
+    delay_ms: z.number().int().min(0).max(10000).optional().describe("Delay in milliseconds between each request. Use for rate-limited APIs. Default 0 (no delay)."),
     items: z.array(
       z.object({
         method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).describe("HTTP method"),
@@ -61,6 +62,7 @@ Returns a proposal_id that tracks the batch through approval and execution.`,
       requestedBy: ctx.triggeredBy,
       requestedInChannel: ctx.channelId,
       requestedInThread: ctx.threadTs,
+      delayMs: input.delay_ms,
     });
 
     if (result.ok) {

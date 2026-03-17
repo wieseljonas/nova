@@ -696,6 +696,7 @@ export const approvals = pgTable(
     credentialOwner: text("credential_owner"),
     urlPattern: text("url_pattern"),
     httpMethod: text("http_method"),
+    delayMs: integer("delay_ms").notNull().default(0),
     totalItems: integer("total_items").notNull().default(1),
     completedItems: integer("completed_items").notNull().default(0),
     failedItems: integer("failed_items").notNull().default(0),

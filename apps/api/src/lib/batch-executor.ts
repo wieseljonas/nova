@@ -25,6 +25,7 @@ export interface CreateProposalArgs {
   requestedBy: string;
   requestedInChannel?: string;
   requestedInThread?: string;
+  delayMs?: number;
   slackClient?: WebClient;
 }
 
@@ -51,7 +52,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
   approvalId?: string;
   error?: string;
 }> {
-  const { title, description, credentialKey, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, slackClient: injectedSlackClient } = args;
+  const { title, description, credentialKey, credentialOwner, items, requestedBy, requestedInChannel, requestedInThread, delayMs, slackClient: injectedSlackClient } = args;
 
   if (items.length === 0) {
     return { ok: false, error: "No items to approve" };
@@ -103,6 +104,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
         requestedBy,
         requestedInChannel: requestedInChannel ?? null,
         requestedInThread: requestedInThread ?? null,
+        delayMs: delayMs ?? 0,
       })
       .returning({ id: approvals.id });
 
@@ -427,6 +429,10 @@ export async function executeBatchProposal(args: {
       // Trim circuit breaker window
       if (recentFailures.length > CIRCUIT_WINDOW) {
         recentFailures.shift();
+      }
+      // Rate-limit delay between requests (if configured)
+      if (approval.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, approval.delayMs));
       }
 
       // Update approval progress
