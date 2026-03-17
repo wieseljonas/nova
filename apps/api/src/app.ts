@@ -784,6 +784,15 @@ app.post("/api/slack/interactions", async (c) => {
               );
               return;
             }
+            if (!approved.credentialKey) {
+              await postEphemeralIfChannel(
+                slackClient,
+                channelId,
+                userId,
+                "Approval is missing credential metadata.",
+              );
+              return;
+            }
 
             const { ttlMinutes } = parseProxyApprovalMetadata(approved.description);
             const proxyToken = mintProxyToken({
