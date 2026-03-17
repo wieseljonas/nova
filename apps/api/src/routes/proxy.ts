@@ -35,7 +35,11 @@ proxyApp.all("/:credentialKey/*", async (c) => {
     return c.json({ ok: false, error: "Credential not allowed by token" }, 403);
   }
 
-  let targetUrl = c.req.param("*");
+  // c.req.param("*") is unreliable with Hono's app.route() mounting.
+  // Extract target URL from the path instead.
+  const pathPrefix = \`/\${credentialKey}/\`;
+  const pathIdx = c.req.path.indexOf(pathPrefix);
+  let targetUrl = pathIdx >= 0 ? c.req.path.slice(pathIdx + pathPrefix.length) : "";
   if (!targetUrl) {
     return c.json({ ok: false, error: "Missing target URL" }, 400);
   }
