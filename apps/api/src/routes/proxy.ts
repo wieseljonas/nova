@@ -148,9 +148,10 @@ const proxyHandler = async (c: Context) => {
     return c.json({ ok: false, error: errorMessage }, 502);
   }
 
-  // Buffer the response instead of streaming -- Vercel's Node.js runtime
-  // can return empty bodies when passing ReadableStream through new Response().
-  const responseBody = await upstreamResponse.arrayBuffer();
+  // Buffer fully — streaming ReadableStream through Vercel can truncate or empty the body.
+  // Use text() so the body is fully decompressed and we know the exact byte length.
+  const responseText = await upstreamResponse.text();
+  const responseBytes = Buffer.byteLength(responseText, "utf-8");
 
   waitUntil(
     db
@@ -169,24 +170,21 @@ const proxyHandler = async (c: Context) => {
           },
           response: {
             status: upstreamResponse.status,
-            headers: sanitizeHeaders(
-              Object.fromEntries(upstreamResponse.headers.entries()),
-            ),
+            contentLength: responseBytes,
           },
         }),
       })
       .catch(() => {}),
   );
 
-  const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.delete("connection");
-  responseHeaders.delete("transfer-encoding");
-  responseHeaders.delete("keep-alive");
-  responseHeaders.delete("content-encoding");
+  const contentType = upstreamResponse.headers.get("content-type") || "application/octet-stream";
 
-  return new Response(responseBody, {
+  return new Response(responseText, {
     status: upstreamResponse.status,
-    headers: responseHeaders,
+    headers: {
+      "content-type": contentType,
+      "content-length": String(responseBytes),
+    },
   });
 };
 
