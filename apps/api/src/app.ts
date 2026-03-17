@@ -827,9 +827,7 @@ app.post("/api/slack/interactions", async (c) => {
                 cardIcon = "❌";
                 cardContext = `Failed · approved by <@${userId}>`;
                 resultText = `Failed: approval is missing credential metadata.`;
-              } else {
-                const credential = await getApiCredentialWithType(credKey, credOwner, credOwner, "write");
-                if (!credential) {
+              } else if (!(await getApiCredentialWithType(credKey, credOwner, credOwner, "write"))) {
                 await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
                 cardColor = "#e01e5a";
                 cardIcon = "❌";
@@ -842,6 +840,7 @@ app.post("/api/slack/interactions", async (c) => {
                 cardContext = `Blocked · approved by <@${userId}>`;
                 resultText = `Blocked: URL resolves to a private/internal address.`;
               } else {
+                const credential = (await getApiCredentialWithType(credKey, credOwner, credOwner, "write"))!;
                 const injected = injectCredentialAuth(url, (meta.headers as Record<string, string>) ?? {}, {
                   authScheme: credential.authScheme,
                   value: credential.value,
@@ -879,7 +878,6 @@ app.post("/api/slack/interactions", async (c) => {
                 resultText = response.ok
                   ? `Request approved and executed. HTTP ${response.status}. Response:\n${bodyPreview}`
                   : `Request approved but failed. HTTP ${response.status}. Response:\n${bodyPreview}`;
-              }
               }
 
             } else {

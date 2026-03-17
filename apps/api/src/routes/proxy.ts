@@ -37,7 +37,7 @@ proxyApp.all("/:credentialKey/*", async (c) => {
 
   // c.req.param("*") is unreliable with Hono's app.route() mounting.
   // Extract target URL from the path instead.
-  const pathPrefix = \`/\${credentialKey}/\`;
+  const pathPrefix = `/${credentialKey}/`;
   const pathIdx = c.req.path.indexOf(pathPrefix);
   let targetUrl = pathIdx >= 0 ? c.req.path.slice(pathIdx + pathPrefix.length) : "";
   if (!targetUrl) {
