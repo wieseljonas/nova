@@ -260,7 +260,7 @@ export async function getApiCredentialWithType(
   ownerId: string,
   requestingUserId: string,
   intent: "read" | "write",
-): Promise<{ value: string; authScheme: AuthScheme; displayName: string | null } | null> {
+): Promise<{ id: string; value: string; authScheme: AuthScheme; displayName: string | null } | null> {
   const cred = await fetchAndAuthorize(name, ownerId, requestingUserId, intent);
   if (!cred) return null;
 
@@ -289,6 +289,7 @@ export async function getApiCredentialWithType(
       parsed.client_secret,
     );
     return {
+      id: cred.id,
       value: tokenResponse.access_token,
       authScheme: cred.authScheme as AuthScheme,
       displayName: cred.displayName,
@@ -298,13 +299,14 @@ export async function getApiCredentialWithType(
   if (cred.authScheme === "google_service_account") {
     const token = await exchangeGoogleServiceAccountToken(decrypted);
     return {
+      id: cred.id,
       value: token,
       authScheme: cred.authScheme as AuthScheme,
       displayName: cred.displayName,
     };
   }
 
-  return { value: decrypted, authScheme: cred.authScheme as AuthScheme, displayName: cred.displayName };
+  return { id: cred.id, value: decrypted, authScheme: cred.authScheme as AuthScheme, displayName: cred.displayName };
 }
 
 async function exchangeGoogleServiceAccountToken(
@@ -721,6 +723,50 @@ export async function withApiCredential<T>(
   } catch (error) {
     throw scrubValue(error, plaintext);
   }
+}
+
+const MAX_AUDIT_BODY_LENGTH = 10_000;
+
+function truncateBody(body: unknown): unknown {
+  if (body == null) return null;
+  const str = typeof body === "string" ? body : JSON.stringify(body);
+  if (str.length <= MAX_AUDIT_BODY_LENGTH) return body;
+  return str.slice(0, MAX_AUDIT_BODY_LENGTH) + "… (truncated)";
+}
+
+const SENSITIVE_HEADERS = new Set(["authorization", "x-api-key", "x-auth-token", "cookie", "set-cookie"]);
+
+function sanitizeHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    out[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? "[REDACTED]" : v;
+  }
+  return out;
+}
+
+export async function auditCredentialHttpUse(
+  credentialId: string,
+  credentialName: string,
+  accessedBy: string,
+  httpRequest: { method: string; url: string; headers?: Record<string, string>; body?: unknown },
+  httpResponse: { status?: number; headers?: Record<string, string>; body?: unknown; error?: string },
+): Promise<void> {
+  await audit(credentialId, credentialName, accessedBy, "use", JSON.stringify({
+    source: "http_request",
+    request: {
+      method: httpRequest.method,
+      url: httpRequest.url,
+      headers: sanitizeHeaders(httpRequest.headers),
+      body: truncateBody(httpRequest.body),
+    },
+    response: {
+      status: httpResponse.status,
+      headers: sanitizeHeaders(httpResponse.headers),
+      body: truncateBody(httpResponse.body),
+      error: httpResponse.error,
+    },
+  }));
 }
 
 export function maskApiCredential(value: string): string {

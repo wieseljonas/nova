@@ -958,6 +958,131 @@ app.post("/api/slack/interactions", async (c) => {
         waitUntil(reviewPromise);
       }
 
+      // ── View batch execution results modal ────────────────────────────
+      if (action.action_id?.startsWith("batch_results_") && payload.trigger_id) {
+        const approvalId = action.action_id.replace("batch_results_", "");
+
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(approvalId)) {
+          logger.warn("Invalid approvalId in batch_results action", { actionId: action.action_id });
+          return c.body("ok");
+        }
+
+        const viewResultsPromise = (async () => {
+          try {
+            const { approvals, approvalItems } = await import("@aura/db/schema");
+            const { eq } = await import("drizzle-orm");
+            const { db } = await import("./db/client.js");
+
+            const approvalRows = await db
+              .select()
+              .from(approvals)
+              .where(eq(approvals.id, approvalId))
+              .limit(1);
+
+            const approval = approvalRows[0];
+            if (!approval) {
+              logger.warn("View results: approval not found", { approvalId });
+              return;
+            }
+
+            const items = await db
+              .select()
+              .from(approvalItems)
+              .where(eq(approvalItems.approvalId, approvalId))
+              .orderBy(approvalItems.sequenceNum)
+              .limit(50);
+
+            const MAX_BODY_CHARS = 2800;
+            const blocks: any[] = [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: approval.title ?? "Batch Results",
+                  emoji: true,
+                },
+              },
+            ];
+
+            for (const item of items) {
+              const icon = item.status === "succeeded" ? "✅" : item.status === "failed" ? "❌" : "⏭️";
+              const statusStr = item.responseStatus ? `${item.responseStatus}` : (item.error ?? item.status ?? "—");
+
+              blocks.push({
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `${icon} *Item ${item.sequenceNum}* · \`${item.method}\` ${item.url}\n→ \`${statusStr}\``,
+                },
+              });
+
+              if (item.responseBody) {
+                const bodyStr = typeof item.responseBody === "string"
+                  ? item.responseBody
+                  : JSON.stringify(item.responseBody, null, 2);
+                const truncated = bodyStr.length > MAX_BODY_CHARS
+                  ? bodyStr.slice(0, MAX_BODY_CHARS) + "\n… (truncated)"
+                  : bodyStr;
+
+                blocks.push({
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `\`\`\`\n${truncated}\n\`\`\``,
+                  },
+                });
+              } else if (item.error) {
+                blocks.push({
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text: `_Error: ${item.error}_`,
+                  },
+                });
+              }
+
+              blocks.push({ type: "divider" });
+            }
+
+            if (blocks.length > 1 && blocks[blocks.length - 1]?.type === "divider") {
+              blocks.pop();
+            }
+
+            if (items.length < (approval.totalItems ?? items.length)) {
+              blocks.push({
+                type: "context",
+                elements: [{
+                  type: "mrkdwn",
+                  text: `_Showing first ${items.length} of ${approval.totalItems} items_`,
+                }],
+              });
+            }
+
+            const modalBlocks = blocks.slice(0, 100);
+
+            const modal: any = {
+              type: "modal",
+              title: {
+                type: "plain_text",
+                text: "Batch Results",
+                emoji: true,
+              },
+              close: {
+                type: "plain_text",
+                text: "Close",
+              },
+              blocks: modalBlocks,
+            };
+
+            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
+          } catch (err) {
+            recordError("interactions.batch_results", err, { userId, approvalId });
+            logger.error("View results modal failed", { userId, approvalId, error: err });
+          }
+        })();
+        waitUntil(viewResultsPromise);
+      }
+
     }
   }
 

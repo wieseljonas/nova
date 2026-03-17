@@ -23,7 +23,7 @@ import {
 import { Combobox } from "@/components/ui/combobox";
 import { AuthSecretFields } from "../credential-secret-fields";
 import type { AuthScheme, SecretPayloadInput } from "../credential-secret";
-import { ArrowLeft, Trash2, Eye } from "lucide-react";
+import { ArrowLeft, Trash2, Eye, ArrowUpRight, ArrowDownLeft } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import type { Credential } from "@schema";
 
@@ -371,6 +371,26 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
                       (() => {
                         try {
                           const parsed = JSON.parse(entry.context);
+                          if (parsed.source === "http_request" && parsed.request?.method) {
+                            const method = parsed.request.method;
+                            const urlPath = (() => {
+                              try { return new URL(parsed.request.url).pathname; } catch { return parsed.request.url; }
+                            })();
+                            const status = parsed.response?.status;
+                            const statusColor = status && status < 400 ? "text-green-600" : "text-red-500";
+                            return (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline font-mono"
+                                onClick={() => setAuditDetailContext(entry.context)}
+                              >
+                                <Eye className="h-3 w-3 shrink-0" />
+                                <span>{method}</span>
+                                <span className="max-w-[180px] truncate">{urlPath}</span>
+                                {status ? <span className={statusColor}>→ {status}</span> : null}
+                              </button>
+                            );
+                          }
                           const summary = [parsed.source, parsed.request?.operation].filter(Boolean).join(" / ") || "details";
                           return (
                             <button
@@ -433,17 +453,96 @@ export function CredentialDetail({ data }: { data: CredentialData }) {
         <DialogHeader>
           <DialogTitle>Audit Log Detail</DialogTitle>
         </DialogHeader>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
-          {(() => {
-            try {
-              return JSON.stringify(JSON.parse(auditDetailContext ?? ""), null, 2);
-            } catch {
-              return auditDetailContext ?? "";
-            }
-          })()}
-        </pre>
+        <AuditDetailContent context={auditDetailContext} />
       </Dialog>
 
     </>
+  );
+}
+
+function JsonBlock({ label, data }: { label: string; data: unknown }) {
+  if (data == null) return null;
+  const formatted = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground mb-1">{label}</p>
+      <pre className="max-h-[30vh] overflow-auto rounded-md bg-muted p-2 text-xs whitespace-pre-wrap">
+        {formatted}
+      </pre>
+    </div>
+  );
+}
+
+function AuditDetailContent({ context }: { context: string | null }) {
+  if (!context) return null;
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(context);
+  } catch {
+    return (
+      <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
+        {context}
+      </pre>
+    );
+  }
+
+  if (parsed.source === "http_request" && (parsed.request?.method || parsed.response)) {
+    const req = parsed.request;
+    const res = parsed.response;
+    const statusColor =
+      res?.status && res.status < 400
+        ? "text-green-600"
+        : res?.status
+          ? "text-red-500"
+          : "text-muted-foreground";
+
+    return (
+      <div className="space-y-4 max-h-[70vh] overflow-auto">
+        {req && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <ArrowUpRight className="h-4 w-4 text-blue-500" />
+              <span className="text-sm font-semibold">Request</span>
+              {req.method && (
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {req.method}
+                </Badge>
+              )}
+            </div>
+            {req.url && (
+              <p className="text-xs font-mono text-muted-foreground break-all">{req.url}</p>
+            )}
+            <JsonBlock label="Headers" data={req.headers} />
+            <JsonBlock label="Body" data={req.body} />
+          </div>
+        )}
+
+        {res && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <ArrowDownLeft className="h-4 w-4 text-green-500" />
+              <span className="text-sm font-semibold">Response</span>
+              {res.status && (
+                <Badge variant="secondary" className={`font-mono text-xs ${statusColor}`}>
+                  {res.status}
+                </Badge>
+              )}
+              {res.error && (
+                <span className="text-xs text-red-500">{res.error}</span>
+              )}
+            </div>
+            <JsonBlock label="Headers" data={res.headers} />
+            <JsonBlock label="Body" data={res.body} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <pre className="max-h-[60vh] overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap">
+      {JSON.stringify(parsed, null, 2)}
+    </pre>
   );
 }
