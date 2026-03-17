@@ -1,9 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { tool, type Tool } from "ai";
 import type { ZodType } from "zod";
-import { checkAccess, getCredentialForApproval } from "./approval.js";
+import { checkAccess, getCredentialForApproval, getApprovers, getApprovalChannel } from "./approval.js";
 import { logger } from "./logger.js";
-import { generateProposalSummary } from "./proposal-summary.js";
+import { WebClient } from "@slack/web-api";
+import { eq } from "drizzle-orm";
+import { db } from "../db/client.js";
+import { approvals } from "@aura/db/schema";
 
 // ── Execution Context (AsyncLocalStorage) ────────────────────────────────────
 
@@ -129,40 +132,91 @@ export function defineTool<TInput, TOutput>(config: {
 
         // Handle require_approval action
         if (action === "require_approval") {
-          const { createProposal } = await import("./batch-executor.js");
-          const summary = await generateProposalSummary({
-            credentialName,
-            method,
-            url,
-            body: httpInput.body,
-            itemCount: 1,
-            reason: httpInput.reason as string | undefined,
-          });
-          
-          const result = await createProposal({
-            title: summary.title,
-            description: summary.description,
-            credentialKey: credentialName,
-            credentialOwner,
-            items: [{
-              method,
-              url,
-              body: httpInput.body,
-              headers: httpInput.headers as Record<string, string> | undefined,
-            }],
-            requestedBy: ctx.triggeredBy,
-            requestedInChannel: ctx.channelId,
-            requestedInThread: ctx.threadTs,
-          });
+          const reason = httpInput.reason as string | undefined;
+          let urlPath: string;
+          try { urlPath = new URL(url).pathname; } catch { urlPath = url.split("?")[0]; }
+          const shortPath = urlPath.length > 60 ? urlPath.slice(0, 57) + "..." : urlPath;
+          const approvalTitle = `${method} ${shortPath} via ${credentialName}`;
 
-          if (!result.ok) {
-            throw new Error(`Failed to create approval proposal: ${result.error}`);
+          const approverIds = getApprovers(credential);
+          const approverMentions = approverIds.map((id) => `<@${id}>`).join(", ");
+          const approvalChannel = getApprovalChannel(credential);
+          const targetChannel = approvalChannel ?? ctx.channelId ?? process.env.AURA_DEFAULT_CHANNEL;
+
+          if (!targetChannel) {
+            throw new Error("No approval channel configured for this credential");
           }
 
-          // Return a special message to the LLM indicating approval is pending
+          const approvalMetadata = JSON.stringify({
+            type: "http_request",
+            method,
+            url,
+            body: httpInput.body ?? null,
+            headers: (httpInput.headers as Record<string, string> | undefined) ?? null,
+            credentialKey: credentialName,
+            credentialOwner,
+            reason: reason ?? null,
+          });
+
+          const [approval] = await db
+            .insert(approvals)
+            .values({
+              title: approvalTitle,
+              description: approvalMetadata,
+              credentialKey: credentialName,
+              credentialOwner,
+              urlPattern: url.split("?")[0],
+              httpMethod: method,
+              totalItems: 1,
+              requestedBy: ctx.triggeredBy,
+              requestedInChannel: ctx.channelId ?? null,
+              requestedInThread: ctx.threadTs ?? null,
+            })
+            .returning({ id: approvals.id });
+
+          const approvalId = approval.id;
+          const bodyPreview = httpInput.body
+            ? JSON.stringify(httpInput.body).slice(0, 500)
+            : null;
+          const descLines = [
+            reason ?? `\`${method}\` ${url}`,
+            `• Credential: \`${credentialName}\``,
+          ];
+          if (bodyPreview) {
+            descLines.push(`• Body: \`${bodyPreview}${bodyPreview.length >= 500 ? "…" : ""}\``);
+          }
+
+          const slackClient = new WebClient(process.env.SLACK_BOT_TOKEN);
+          const resp = await slackClient.chat.postMessage({
+            channel: targetChannel,
+            ...(ctx.threadTs ? { thread_ts: ctx.threadTs } : {}),
+            text: "",
+            attachments: [{
+              color: "#e8912d",
+              blocks: [
+                { type: "section", text: { type: "mrkdwn", text: `*🔒 ${approvalTitle}*` } },
+                { type: "section", text: { type: "mrkdwn", text: descLines.join("\n") } },
+                {
+                  type: "actions",
+                  elements: [
+                    { type: "button", text: { type: "plain_text", text: "✅ Approve", emoji: true }, style: "primary", action_id: `approval_approve_${approvalId}`, value: approvalId },
+                    { type: "button", text: { type: "plain_text", text: "❌ Reject", emoji: true }, style: "danger", action_id: `approval_reject_${approvalId}`, value: approvalId },
+                  ],
+                },
+                { type: "context", elements: [{ type: "mrkdwn", text: `\`write\` · requested by <@${ctx.triggeredBy}> · ${approverMentions || "admins"}` }] },
+              ],
+            }],
+            metadata: { event_type: "approval_request", event_payload: { approval_id: approvalId } },
+          });
+
+          await db
+            .update(approvals)
+            .set({ slackMessageTs: resp.ts ?? "", slackChannel: resp.channel ?? targetChannel })
+            .where(eq(approvals.id, approvalId));
+
           return {
             status: "awaiting_approval",
-            proposal_id: result.approvalId,
+            proposal_id: approvalId,
             message: "This request has been submitted for approval. I'll execute it once approved.",
           } as TOutput;
         }

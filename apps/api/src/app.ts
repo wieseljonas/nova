@@ -25,7 +25,6 @@ import {
   addCredentialReader,
   addCredentialWriter,
   listApiCredentials,
-  listAccessForCredentials,
   hasPermission,
 } from "./lib/api-credentials.js";
 import { resolveConfirmation } from "./lib/confirmation.js";
@@ -34,8 +33,12 @@ import { setSetting } from "./lib/settings.js";
 import { logger } from "./lib/logger.js";
 import { recordError } from "./lib/metrics.js";
 import { safePostMessage } from "./lib/slack-messaging.js";
-import { executeBatchProposal } from "./lib/batch-executor.js";
 import { isAuthorizedApprover } from "./lib/approval.js";
+import { mintProxyToken } from "./lib/proxy-token.js";
+import { proxyApp } from "./routes/proxy.js";
+import { injectCredentialAuth } from "./lib/credential-auth.js";
+import { isPrivateUrl } from "./lib/ssrf.js";
+import { getApiCredentialWithType, auditCredentialHttpUse } from "./lib/api-credentials.js";
 import crypto from "node:crypto";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
@@ -71,6 +74,20 @@ app.get("/", (c) => {
 app.get("/api/health", (c) => {
   return c.json({ ok: true, timestamp: new Date().toISOString() });
 });
+
+// Mount credential proxy route
+app.route("/proxy", proxyApp);
+
+function parseApprovalMetadata(description: string | null | undefined): Record<string, any> | null {
+  if (!description) return null;
+  try {
+    const parsed = JSON.parse(description);
+    if (typeof parsed === "object" && parsed !== null && typeof parsed.type === "string") {
+      return parsed;
+    }
+  } catch { /* not JSON or no type field — legacy approval */ }
+  return null;
+}
 
 // ── Dashboard API (authenticated with DASHBOARD_API_SECRET) ─────────────────
 
@@ -758,8 +775,6 @@ app.post("/api/slack/interactions", async (c) => {
             });
             if (!approval) return;
 
-            // Atomic CAS: set status to "approved" only if still "pending".
-            // Prevents double-execution when two users click Approve simultaneously.
             const updatedRows = await db
               .update(approvals)
               .set({
@@ -770,30 +785,142 @@ app.post("/api/slack/interactions", async (c) => {
               .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
               .returning();
 
-            const updatedApproval = updatedRows[0];
-            if (!updatedApproval) {
+            const approved = updatedRows[0];
+            if (!approved) {
               await postEphemeralIfChannel(slackClient, channelId, userId, "This approval has already been processed.");
               return;
             }
 
-            const newApprovedBy = updatedApproval.approvedBy ?? [];
+            const meta = parseApprovalMetadata(approved.description);
+            let resultText: string;
+            let cardColor = "#2eb67d";
+            let cardIcon = "✅";
+            let cardContext = `Approved by <@${userId}>`;
 
-            const result = await executeBatchProposal({ approvalId, slackClient });
-            if (!result.ok) {
-              logger.error("Batch execution after approval failed", {
-                approvalId,
-                error: result.error,
+            if (meta?.type === "proxy_session") {
+              // ── Proxy session: mint JWT, store token ──
+              if (!approved.credentialKey) {
+                await postEphemeralIfChannel(slackClient, channelId, userId, "Approval is missing credential metadata.");
+                return;
+              }
+              const ttlMinutes = (typeof meta.ttlMinutes === "number" && meta.ttlMinutes >= 5 && meta.ttlMinutes <= 60) ? meta.ttlMinutes : 15;
+              const proxyToken = mintProxyToken({
+                credentialKeys: [approved.credentialKey],
+                userId: approved.requestedBy,
+                credentialOwner: approved.credentialOwner ?? approved.requestedBy,
+                ttlMinutes,
+              });
+              await setSetting(`proxy_session_token:${approved.requestedBy}`, proxyToken, userId);
+              cardContext = `Approved by <@${userId}> · token TTL ${ttlMinutes}m`;
+              resultText = `Access to ${approved.credentialKey} granted. Use NOVA_PROXY_URL and NOVA_PROXY_TOKEN in your sandbox scripts. Token expires in ${ttlMinutes} minutes.`;
+
+            } else if (meta?.type === "http_request") {
+              // ── HTTP request: execute inline ──
+              const credKey = meta.credentialKey as string;
+              const credOwner = meta.credentialOwner as string;
+              const method = meta.method as string;
+              const url = meta.url as string;
+
+              const credential = await getApiCredentialWithType(credKey, credOwner, credOwner, "write");
+              if (!credential) {
+                await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
+                cardColor = "#e01e5a";
+                cardIcon = "❌";
+                cardContext = `Failed · approved by <@${userId}>`;
+                resultText = `Failed: credential "${credKey}" not found or expired.`;
+              } else if (await isPrivateUrl(url)) {
+                await db.update(approvals).set({ status: "failed", updatedAt: new Date() }).where(eq(approvals.id, approvalId));
+                cardColor = "#e01e5a";
+                cardIcon = "❌";
+                cardContext = `Blocked · approved by <@${userId}>`;
+                resultText = `Blocked: URL resolves to a private/internal address.`;
+              } else {
+                const injected = injectCredentialAuth(url, (meta.headers as Record<string, string>) ?? {}, {
+                  authScheme: credential.authScheme,
+                  value: credential.value,
+                });
+                const headers = injected.headers;
+                if (meta.body && method !== "GET" && method !== "HEAD" && !Object.keys(headers).some(k => k.toLowerCase() === "content-type")) {
+                  headers["Content-Type"] = "application/json";
+                }
+
+                const response = await fetch(injected.url, {
+                  method,
+                  headers,
+                  body: meta.body ? (typeof meta.body === "string" ? meta.body : JSON.stringify(meta.body)) : undefined,
+                  redirect: "manual",
+                });
+                const responseText = await response.text();
+                let responseBody: any = responseText;
+                try { responseBody = JSON.parse(responseText); } catch { /* keep as text */ }
+
+                auditCredentialHttpUse(
+                  credential.id, credKey, credOwner,
+                  { method, url, headers: meta.headers, body: meta.body },
+                  { status: response.status, body: responseBody },
+                ).catch(() => {});
+
+                const finalStatus = response.ok ? "completed" : "failed";
+                await db.update(approvals).set({
+                  status: finalStatus, completedItems: response.ok ? 1 : 0, failedItems: response.ok ? 0 : 1, updatedAt: new Date(),
+                }).where(eq(approvals.id, approvalId));
+
+                cardColor = response.ok ? "#2eb67d" : "#e01e5a";
+                cardIcon = response.ok ? "✅" : "❌";
+                cardContext = `${cardIcon} HTTP ${response.status} · approved by <@${userId}>`;
+                const bodyPreview = JSON.stringify(responseBody).slice(0, 5000);
+                resultText = response.ok
+                  ? `Request approved and executed. HTTP ${response.status}. Response:\n${bodyPreview}`
+                  : `Request approved but failed. HTTP ${response.status}. Response:\n${bodyPreview}`;
+              }
+
+            } else {
+              resultText = `Approval ${approvalId} approved.`;
+            }
+
+            // Update Slack card
+            if (approved.slackChannel && approved.slackMessageTs) {
+              await slackClient.chat.update({
+                channel: approved.slackChannel,
+                ts: approved.slackMessageTs,
+                text: `Approved by <@${userId}>`,
+                attachments: [{
+                  color: cardColor,
+                  blocks: [
+                    { type: "section", text: { type: "mrkdwn", text: `*${cardIcon} ${approved.title}*` } },
+                    { type: "context", elements: [{ type: "mrkdwn", text: cardContext }] },
+                  ],
+                }],
               });
             }
 
-            logger.info("Batch approval approved and execution started", {
-              approvalId,
-              approvedBy: newApprovedBy,
-              approvalCount: newApprovedBy.length,
-            });
+            // Re-invoke pipeline
+            if (approved.requestedInChannel && approved.requestedInThread) {
+              const syntheticEvent = {
+                type: "message" as const,
+                channel: approved.requestedInChannel,
+                ts: `${(Date.now() / 1000).toFixed(6)}`,
+                thread_ts: approved.requestedInThread,
+                text: resultText,
+                user: approved.requestedBy,
+                channel_type: approved.requestedInChannel.startsWith("D") ? "im" : "channel",
+              };
+
+              await executionContext.run(
+                {
+                  triggeredBy: approved.requestedBy,
+                  triggerType: "user_message",
+                  channelId: approved.requestedInChannel,
+                  threadTs: approved.requestedInThread,
+                },
+                () => runPipeline({ event: syntheticEvent, client: slackClient, botUserId, teamId: payload.team?.id }),
+              );
+            }
+
+            logger.info("Approval processed", { approvalId, type: meta?.type, approvedBy: userId });
           } catch (err) {
             recordError("interactions.approval_approve", err, { userId, approvalId });
-            logger.error("Approval button handler failed", { userId, approvalId, error: err });
+            logger.error("Approval handler failed", { userId, approvalId, error: err });
           }
         })();
         waitUntil(approvePromise);
@@ -819,13 +946,9 @@ app.post("/api/slack/interactions", async (c) => {
             });
             if (!approval) return;
 
-            // Atomic CAS: only reject if still pending
             const rejectedRows = await db
               .update(approvals)
-              .set({
-                status: "rejected",
-                updatedAt: new Date(),
-              })
+              .set({ status: "rejected", updatedAt: new Date() })
               .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
               .returning();
 
@@ -834,253 +957,28 @@ app.post("/api/slack/interactions", async (c) => {
               return;
             }
 
-            // Update Slack card
-            if (approval?.slackChannel && approval.slackMessageTs) {
+            if (approval.slackChannel && approval.slackMessageTs) {
               await slackClient.chat.update({
                 channel: approval.slackChannel,
                 ts: approval.slackMessageTs,
                 text: `Rejected by <@${userId}>`,
-                attachments: [
-                  {
-                    color: "#e01e5a",
-                    blocks: [
-                      {
-                        type: "section",
-                        text: {
-                          type: "mrkdwn",
-                          text: `*❌ ${approval.title}*`,
-                        },
-                      },
-                      {
-                        type: "context",
-                        elements: [
-                          {
-                            type: "mrkdwn",
-                            text: `Rejected by <@${userId}>`,
-                          },
-                        ],
-                      },
-                    ],
-                  },
-                ],
-              });
-            }
-
-            logger.info("Batch approval rejected", {
-              approvalId,
-              rejectedBy: userId,
-            });
-          } catch (err) {
-            recordError("interactions.approval_reject", err, { userId, approvalId });
-            logger.error("Rejection button handler failed", { userId, approvalId, error: err });
-          }
-        })();
-        waitUntil(rejectPromise);
-      }
-
-      if (action.action_id?.startsWith("approval_review_") && payload.trigger_id) {
-        const approvalId = action.action_id.replace("approval_review_", "");
-
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(approvalId)) {
-          logger.warn("Invalid approvalId in action_id", { actionId: action.action_id });
-          return c.body("ok");
-        }
-
-        const reviewPromise = (async () => {
-          try {
-            const { approvals, approvalItems } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-
-            const approvalRows = await db
-              .select()
-              .from(approvals)
-              .where(eq(approvals.id, approvalId))
-              .limit(1);
-
-            const approval = approvalRows[0];
-            if (!approval) {
-              logger.warn("Review: approval not found", { approvalId });
-              return;
-            }
-
-            const items = await db
-              .select()
-              .from(approvalItems)
-              .where(eq(approvalItems.approvalId, approvalId))
-              .orderBy(approvalItems.sequenceNum)
-              .limit(10);
-
-            const itemsText = items.map((item, idx) => 
-              `${idx + 1}. \`${item.method}\` ${item.url}`
-            ).join("\n");
-
-            const totalText = approval.totalItems > 10 
-              ? `\n\n_Showing first 10 of ${approval.totalItems} items_` 
-              : "";
-
-            const modal: any = {
-              type: "modal",
-              title: {
-                type: "plain_text",
-                text: "Approval Items",
-                emoji: true,
-              },
-              close: {
-                type: "plain_text",
-                text: "Close",
-              },
-              blocks: [
-                {
-                  type: "header",
-                  text: {
-                    type: "plain_text",
-                    text: approval.title,
-                    emoji: true,
-                  },
-                },
-                {
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: `*Items to execute:*\n${itemsText}${totalText}`,
-                  },
-                },
-              ],
-            };
-
-            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
-          } catch (err) {
-            recordError("interactions.approval_review", err, { userId, approvalId });
-            logger.error("Review modal failed", { userId, approvalId, error: err });
-          }
-        })();
-        waitUntil(reviewPromise);
-      }
-
-      // ── View batch execution results modal ────────────────────────────
-      if (action.action_id?.startsWith("batch_results_") && payload.trigger_id) {
-        const approvalId = action.action_id.replace("batch_results_", "");
-
-        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(approvalId)) {
-          logger.warn("Invalid approvalId in batch_results action", { actionId: action.action_id });
-          return c.body("ok");
-        }
-
-        const viewResultsPromise = (async () => {
-          try {
-            const { approvals, approvalItems } = await import("@aura/db/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db/client.js");
-
-            const approvalRows = await db
-              .select()
-              .from(approvals)
-              .where(eq(approvals.id, approvalId))
-              .limit(1);
-
-            const approval = approvalRows[0];
-            if (!approval) {
-              logger.warn("View results: approval not found", { approvalId });
-              return;
-            }
-
-            const items = await db
-              .select()
-              .from(approvalItems)
-              .where(eq(approvalItems.approvalId, approvalId))
-              .orderBy(approvalItems.sequenceNum)
-              .limit(50);
-
-            const MAX_BODY_CHARS = 2800;
-            const blocks: any[] = [
-              {
-                type: "header",
-                text: {
-                  type: "plain_text",
-                  text: approval.title ?? "Batch Results",
-                  emoji: true,
-                },
-              },
-            ];
-
-            for (const item of items) {
-              const icon = item.status === "succeeded" ? "✅" : item.status === "failed" ? "❌" : "⏭️";
-              const statusStr = item.responseStatus ? `${item.responseStatus}` : (item.error ?? item.status ?? "—");
-
-              blocks.push({
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: `${icon} *Item ${item.sequenceNum}* · \`${item.method}\` ${item.url}\n→ \`${statusStr}\``,
-                },
-              });
-
-              if (item.responseBody) {
-                const bodyStr = typeof item.responseBody === "string"
-                  ? item.responseBody
-                  : JSON.stringify(item.responseBody, null, 2);
-                const truncated = bodyStr.length > MAX_BODY_CHARS
-                  ? bodyStr.slice(0, MAX_BODY_CHARS) + "\n… (truncated)"
-                  : bodyStr;
-
-                blocks.push({
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: `\`\`\`\n${truncated}\n\`\`\``,
-                  },
-                });
-              } else if (item.error) {
-                blocks.push({
-                  type: "section",
-                  text: {
-                    type: "mrkdwn",
-                    text: `_Error: ${item.error}_`,
-                  },
-                });
-              }
-
-              blocks.push({ type: "divider" });
-            }
-
-            if (blocks.length > 1 && blocks[blocks.length - 1]?.type === "divider") {
-              blocks.pop();
-            }
-
-            if (items.length < (approval.totalItems ?? items.length)) {
-              blocks.push({
-                type: "context",
-                elements: [{
-                  type: "mrkdwn",
-                  text: `_Showing first ${items.length} of ${approval.totalItems} items_`,
+                attachments: [{
+                  color: "#e01e5a",
+                  blocks: [
+                    { type: "section", text: { type: "mrkdwn", text: `*❌ ${approval.title}*` } },
+                    { type: "context", elements: [{ type: "mrkdwn", text: `Rejected by <@${userId}>` }] },
+                  ],
                 }],
               });
             }
 
-            const modalBlocks = blocks.slice(0, 100);
-
-            const modal: any = {
-              type: "modal",
-              title: {
-                type: "plain_text",
-                text: "Batch Results",
-                emoji: true,
-              },
-              close: {
-                type: "plain_text",
-                text: "Close",
-              },
-              blocks: modalBlocks,
-            };
-
-            await slackClient.views.open({ trigger_id: payload.trigger_id, view: modal });
+            logger.info("Approval rejected", { approvalId, rejectedBy: userId });
           } catch (err) {
-            recordError("interactions.batch_results", err, { userId, approvalId });
-            logger.error("View results modal failed", { userId, approvalId, error: err });
+            recordError("interactions.approval_reject", err, { userId, approvalId });
+            logger.error("Rejection handler failed", { userId, approvalId, error: err });
           }
         })();
-        waitUntil(viewResultsPromise);
+        waitUntil(rejectPromise);
       }
 
     }

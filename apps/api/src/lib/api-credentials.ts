@@ -736,7 +736,7 @@ function truncateBody(body: unknown): unknown {
 
 const SENSITIVE_HEADERS = new Set(["authorization", "x-api-key", "x-auth-token", "cookie", "set-cookie"]);
 
-function sanitizeHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+export function sanitizeHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
   if (!headers) return undefined;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(headers)) {
