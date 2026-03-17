@@ -9,7 +9,7 @@ import { credentialAuditLog } from "@aura/db/schema";
 
 export const proxyApp = new Hono();
 
-proxyApp.all("/:credentialKey/*", async (c) => {
+proxyApp.all("/:credentialKey{.+}", async (c) => {
   const credentialKey = c.req.param("credentialKey");
   if (!credentialKey) {
     return c.json({ ok: false, error: "Missing credential key" }, 400);
@@ -35,18 +35,26 @@ proxyApp.all("/:credentialKey/*", async (c) => {
     return c.json({ ok: false, error: "Credential not allowed by token" }, 403);
   }
 
-  // c.req.param("*") is unreliable with Hono's app.route() mounting.
-  // Extract target URL from the path instead.
-  const pathPrefix = `/${credentialKey}/`;
-  const pathIdx = c.req.path.indexOf(pathPrefix);
-  let targetUrl = pathIdx >= 0 ? c.req.path.slice(pathIdx + pathPrefix.length) : "";
+  // Primary: read target URL from header (immune to path normalization).
+  // Fallback: extract from path for backwards compat.
+  let targetUrl = c.req.header("x-target-url") ?? "";
+
   if (!targetUrl) {
-    return c.json({ ok: false, error: "Missing target URL" }, 400);
+    const pathPrefix = `/${credentialKey}/`;
+    const pathIdx = c.req.path.indexOf(pathPrefix);
+    targetUrl = pathIdx >= 0 ? c.req.path.slice(pathIdx + pathPrefix.length) : "";
+    // Vercel 308 redirects collapse // to / in paths; reconstruct protocol.
+    if (targetUrl) {
+      targetUrl = targetUrl.replace(/^(https?:\/)([^/])/, "$1/$2");
+    }
   }
 
-  // Vercel's edge layer issues 308 redirects that collapse // to / in paths.
-  // Reconstruct the protocol double-slash if it was stripped.
-  targetUrl = targetUrl.replace(/^(https?:\/)([^/])/, "$1/$2");
+  if (!targetUrl) {
+    return c.json(
+      { ok: false, error: "Missing target URL. Set X-Target-URL header or include URL in path." },
+      400,
+    );
+  }
 
   const requestUrl = new URL(c.req.url);
   if (requestUrl.search) {
@@ -86,6 +94,7 @@ proxyApp.all("/:credentialKey/*", async (c) => {
   delete inboundHeaders.authorization;
   delete inboundHeaders.host;
   delete inboundHeaders["content-length"];
+  delete inboundHeaders["x-target-url"];
 
   let forwardedUrl = targetUrl;
   let forwardedHeaders = inboundHeaders;
@@ -139,6 +148,10 @@ proxyApp.all("/:credentialKey/*", async (c) => {
     return c.json({ ok: false, error: errorMessage }, 502);
   }
 
+  // Buffer the response instead of streaming -- Vercel's Node.js runtime
+  // can return empty bodies when passing ReadableStream through new Response().
+  const responseBody = await upstreamResponse.arrayBuffer();
+
   waitUntil(
     db
       .insert(credentialAuditLog)
@@ -169,8 +182,9 @@ proxyApp.all("/:credentialKey/*", async (c) => {
   responseHeaders.delete("connection");
   responseHeaders.delete("transfer-encoding");
   responseHeaders.delete("keep-alive");
+  responseHeaders.delete("content-encoding");
 
-  return new Response(upstreamResponse.body, {
+  return new Response(responseBody, {
     status: upstreamResponse.status,
     headers: responseHeaders,
   });
