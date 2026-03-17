@@ -4,7 +4,10 @@ This document describes the current Human-in-the-Loop (HITL) flow for governed A
 
 ## Scope
 
-HITL currently applies to governed `http_request` tool executions that are classified as write operations and require approval.
+HITL currently applies to:
+
+- governed `http_request` tool executions that are classified as write operations and require approval
+- sandbox credential proxy session requests (`request_credential_access`) that grant short-lived, scoped proxy tokens
 
 HITL does not use the legacy policy engine anymore. It is credential-centric and enforced in tool execution + Slack approval actions.
 
@@ -70,9 +73,12 @@ sequenceDiagram
 - `apps/api/src/lib/tool.ts` - governance interception for `http_request`.
 - `apps/api/src/lib/approval.ts` - access checks + approver resolution.
 - `apps/api/src/lib/batch-executor.ts` - proposal creation, item execution, Slack card updates.
+- `apps/api/src/lib/proxy-token.ts` - scoped proxy token mint/verify (HMAC-SHA256 with `CRON_SECRET`).
 - `apps/api/src/app.ts` - Slack interaction handlers (`approval_approve_*`, `approval_reject_*`, `approval_review_*`).
+- `apps/api/src/app.ts` - proxy request route (`/proxy/:credentialKey/*`) and proxy approval handlers (`proxy_approve_*`, `proxy_reject_*`).
 - `apps/api/src/tools/http-request.ts` - governed external request tool.
-- `apps/api/src/tools/approvals.ts` - explicit `propose_batch` tool.
+- `apps/api/src/tools/approvals.ts` - explicit `request_credential_access` tool.
+- `apps/api/src/lib/sandbox.ts` - per-command proxy env injection (`NOVA_PROXY_URL`, `NOVA_PROXY_TOKEN`) when a valid token exists.
 - `packages/db/src/schema.ts` - `approvals`, `approval_items`, `credentials` schema.
 
 ## Data Model (Relevant Tables)
@@ -203,7 +209,37 @@ Batch execution now supports current credential format (`authScheme` + `value`):
 - Credential plaintext is never returned to LLM directly.
 - Access checks are performed server-side against credential owner/writer/reader lists.
 - Approval/rejection authorization is re-validated at click time (live credential lookup).
+- Proxy tokens are scoped to approved credential keys and expire quickly (default 15 minutes).
+- Proxy route enforces SSRF protection (`isPrivateUrl`) on every proxied request.
+- Every proxied request is audited in `credential_audit_log` with request/response metadata.
 - Execution endpoint is protected by `CRON_SECRET`.
+
+## Credential Proxy Session Flow
+
+For high-volume API operations, Nova can request a scoped proxy session instead of executing many one-off `http_request` calls:
+
+1. LLM calls `request_credential_access(credential_key, reason, ttl_minutes?)`.
+2. Tool creates a pending approval and posts Slack card actions:
+   - `proxy_approve_<approvalId>`
+   - `proxy_reject_<approvalId>`
+3. On approval:
+   - handler atomically transitions approval `pending -> approved`
+   - mints JWT via `mintProxyToken({ sub=requestedBy, creds=[credential_key], exp })`
+   - stores token in settings as `proxy_session_token`
+   - re-invokes pipeline in the original thread with a synthetic "access granted" message
+4. On next `run_command`, `getSandboxEnvs()` injects:
+   - `NOVA_PROXY_URL` (e.g. `https://<prod-host>/proxy`)
+   - `NOVA_PROXY_TOKEN`
+5. Sandbox script calls:
+   - `POST ${NOVA_PROXY_URL}/${credential_key}/${full_target_url}`
+6. `/proxy/:credentialKey/*` route:
+   - verifies Bearer JWT + expiry
+   - checks requested `credentialKey` is in token scope
+   - fetches credential owned by token subject
+   - applies `injectCredentialAuth()`
+   - blocks private/internal targets with `isPrivateUrl()`
+   - forwards request and streams response back
+   - writes audit entry to `credential_audit_log`
 
 ## Legacy Notes
 

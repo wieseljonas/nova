@@ -5,6 +5,8 @@ import { db } from "../db/client.js";
 import { credentials } from "@aura/db/schema";
 import { isNotNull } from "drizzle-orm";
 import { logger } from "./logger.js";
+import { verifyProxyToken } from "./proxy-token.js";
+import { executionContext } from "./tool.js";
 
 const SANDBOX_NOTE_KEY = "e2b_sandbox_id";
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -104,6 +106,26 @@ export async function getSandboxEnvs(): Promise<Record<string, string>> {
     }
   } catch (e: any) {
     logger.warn("Failed to query credentials for sandbox injection", { error: e.message });
+  }
+
+  const proxyToken = await getSetting("proxy_session_token");
+  if (proxyToken) {
+    try {
+      const payload = verifyProxyToken(proxyToken);
+      const activeUserId = executionContext.getStore()?.triggeredBy;
+      if (!activeUserId || activeUserId === payload.userId) {
+        const productionHost = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+        const baseUrl = productionHost
+          ? productionHost.startsWith("http")
+            ? productionHost
+            : `https://${productionHost}`
+          : "https://aura-alpha-five.vercel.app";
+        envs.NOVA_PROXY_URL = `${baseUrl.replace(/\/+$/, "")}/proxy`;
+        envs.NOVA_PROXY_TOKEN = proxyToken;
+      }
+    } catch {
+      await setSetting("proxy_session_token", "", "system");
+    }
   }
 
   return envs;

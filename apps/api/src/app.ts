@@ -36,10 +36,14 @@ import { recordError } from "./lib/metrics.js";
 import { safePostMessage } from "./lib/slack-messaging.js";
 import { executeBatchProposal } from "./lib/batch-executor.js";
 import { isAuthorizedApprover } from "./lib/approval.js";
+import { injectCredentialAuth } from "./lib/credential-auth.js";
+import { isPrivateUrl } from "./lib/ssrf.js";
+import { getApiCredentialWithType } from "./lib/api-credentials.js";
+import { mintProxyToken, verifyProxyToken } from "./lib/proxy-token.js";
 import crypto from "node:crypto";
 import { eq, and, sql } from "drizzle-orm";
 import { db } from "./db/client.js";
-import { approvals, notes, feedback } from "@aura/db/schema";
+import { approvals, credentialAuditLog, notes, feedback } from "@aura/db/schema";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +74,214 @@ app.get("/", (c) => {
 
 app.get("/api/health", (c) => {
   return c.json({ ok: true, timestamp: new Date().toISOString() });
+});
+
+function sanitizeProxyHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  const sensitive = new Set([
+    "authorization",
+    "x-api-key",
+    "x-auth-token",
+    "cookie",
+    "set-cookie",
+  ]);
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers)) {
+    out[k] = sensitive.has(k.toLowerCase()) ? "[REDACTED]" : v;
+  }
+  return out;
+}
+
+function parseProxyApprovalMetadata(description: string | null | undefined): {
+  ttlMinutes: number;
+} {
+  if (!description) return { ttlMinutes: 15 };
+  try {
+    const parsed = JSON.parse(description) as {
+      type?: string;
+      ttlMinutes?: number;
+    };
+    if (parsed.type !== "proxy_session") return { ttlMinutes: 15 };
+    const ttlMinutes =
+      typeof parsed.ttlMinutes === "number" &&
+      Number.isInteger(parsed.ttlMinutes) &&
+      parsed.ttlMinutes >= 5 &&
+      parsed.ttlMinutes <= 60
+        ? parsed.ttlMinutes
+        : 15;
+    return { ttlMinutes };
+  } catch {
+    return { ttlMinutes: 15 };
+  }
+}
+
+app.all("/proxy/:credentialKey/*", async (c) => {
+  const credentialKey = c.req.param("credentialKey");
+  if (!credentialKey) {
+    return c.json({ ok: false, error: "Missing credential key" }, 400);
+  }
+
+  const authHeader = c.req.header("authorization") ?? "";
+  const tokenMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!tokenMatch) {
+    return c.json({ ok: false, error: "Missing bearer token" }, 401);
+  }
+
+  let tokenPayload: { credentialKeys: string[]; userId: string };
+  try {
+    tokenPayload = verifyProxyToken(tokenMatch[1]);
+  } catch (error: any) {
+    return c.json(
+      { ok: false, error: error?.message || "Invalid proxy token" },
+      401,
+    );
+  }
+
+  if (!tokenPayload.credentialKeys.includes(credentialKey)) {
+    return c.json({ ok: false, error: "Credential not allowed by token" }, 403);
+  }
+
+  const basePrefix = `/proxy/${credentialKey}/`;
+  if (!c.req.path.startsWith(basePrefix)) {
+    return c.json({ ok: false, error: "Invalid proxy path" }, 400);
+  }
+
+  let targetUrl = c.req.path.slice(basePrefix.length);
+  if (!targetUrl) {
+    return c.json({ ok: false, error: "Missing target URL" }, 400);
+  }
+
+  try {
+    targetUrl = decodeURIComponent(targetUrl);
+  } catch {
+    // Best effort: keep as-is if not encoded
+  }
+
+  const requestUrl = new URL(c.req.url);
+  if (requestUrl.search) {
+    targetUrl = targetUrl.includes("?")
+      ? `${targetUrl}&${requestUrl.search.slice(1)}`
+      : `${targetUrl}${requestUrl.search}`;
+  }
+
+  if (!/^https?:\/\//i.test(targetUrl)) {
+    return c.json({ ok: false, error: "Target URL must start with http(s)://" }, 400);
+  }
+
+  if (await isPrivateUrl(targetUrl)) {
+    return c.json(
+      { ok: false, error: "Blocked: target URL resolves to a private/internal address" },
+      403,
+    );
+  }
+
+  const credential = await getApiCredentialWithType(
+    credentialKey,
+    tokenPayload.userId,
+    tokenPayload.userId,
+    "read",
+  );
+  if (!credential) {
+    return c.json(
+      { ok: false, error: `Credential "${credentialKey}" not found or expired` },
+      404,
+    );
+  }
+
+  const inboundHeaders = Object.fromEntries(c.req.raw.headers.entries());
+  delete inboundHeaders.authorization;
+  delete inboundHeaders.host;
+  delete inboundHeaders["content-length"];
+
+  let forwardedUrl = targetUrl;
+  let forwardedHeaders = inboundHeaders;
+  try {
+    const injected = injectCredentialAuth(targetUrl, inboundHeaders, {
+      authScheme: credential.authScheme,
+      value: credential.value,
+    });
+    forwardedUrl = injected.url;
+    forwardedHeaders = injected.headers;
+  } catch (error: any) {
+    return c.json(
+      { ok: false, error: error?.message || "Credential auth injection failed" },
+      400,
+    );
+  }
+
+  const method = c.req.method.toUpperCase();
+  const body =
+    method === "GET" || method === "HEAD" ? undefined : c.req.raw.body;
+
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(forwardedUrl, {
+      method,
+      headers: forwardedHeaders,
+      body,
+      redirect: "manual",
+    });
+  } catch (error: any) {
+    const errorMessage = error?.message || "Proxy request failed";
+    waitUntil(
+      db
+        .insert(credentialAuditLog)
+        .values({
+          credentialId: credential.id,
+          credentialName: credentialKey,
+          accessedBy: tokenPayload.userId,
+          action: "use",
+          context: JSON.stringify({
+            source: "proxy",
+            request: {
+              method,
+              url: targetUrl,
+              headers: sanitizeProxyHeaders(inboundHeaders),
+            },
+            response: { error: errorMessage },
+          }),
+        })
+        .catch(() => {}),
+    );
+    return c.json({ ok: false, error: errorMessage }, 502);
+  }
+
+  waitUntil(
+    db
+      .insert(credentialAuditLog)
+      .values({
+        credentialId: credential.id,
+        credentialName: credentialKey,
+        accessedBy: tokenPayload.userId,
+        action: "use",
+        context: JSON.stringify({
+          source: "proxy",
+          request: {
+            method,
+            url: targetUrl,
+            headers: sanitizeProxyHeaders(inboundHeaders),
+          },
+          response: {
+            status: upstreamResponse.status,
+            headers: sanitizeProxyHeaders(
+              Object.fromEntries(upstreamResponse.headers.entries()),
+            ),
+          },
+        }),
+      })
+      .catch(() => {}),
+  );
+
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  responseHeaders.delete("connection");
+  responseHeaders.delete("transfer-encoding");
+  responseHeaders.delete("keep-alive");
+
+  return new Response(upstreamResponse.body, {
+    status: upstreamResponse.status,
+    headers: responseHeaders,
+  });
 });
 
 // ── Dashboard API (authenticated with DASHBOARD_API_SECRET) ─────────────────
@@ -514,6 +726,245 @@ app.post("/api/slack/interactions", async (c) => {
           })();
           waitUntil(feedbackPromise);
         }
+        continue;
+      }
+
+      if (action.action_id?.startsWith("proxy_approve_")) {
+        const approvalId = action.action_id.replace("proxy_approve_", "");
+        if (
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            approvalId,
+          )
+        ) {
+          logger.warn("Invalid proxy approvalId in action_id", {
+            actionId: action.action_id,
+          });
+          continue;
+        }
+
+        const approvePromise = (async () => {
+          try {
+            const channelId = payload.channel?.id;
+            const approval = await loadAuthorizedPendingApproval({
+              approvalId,
+              userId,
+              channelId,
+              slackClient,
+              unauthorizedText:
+                "You're not authorized to approve this proxy access request.",
+            });
+            if (!approval) return;
+            if (!approval.credentialKey) {
+              await postEphemeralIfChannel(
+                slackClient,
+                channelId,
+                userId,
+                "Approval is missing credential metadata.",
+              );
+              return;
+            }
+
+            const approvedRows = await db
+              .update(approvals)
+              .set({
+                status: "approved",
+                approvedBy: sql`array_append(${approvals.approvedBy}, ${userId})`,
+                updatedAt: new Date(),
+              })
+              .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
+              .returning();
+
+            const approved = approvedRows[0];
+            if (!approved) {
+              await postEphemeralIfChannel(
+                slackClient,
+                channelId,
+                userId,
+                "This approval has already been processed.",
+              );
+              return;
+            }
+
+            const { ttlMinutes } = parseProxyApprovalMetadata(approved.description);
+            const proxyToken = mintProxyToken({
+              credentialKeys: [approved.credentialKey],
+              userId: approved.requestedBy,
+              ttlMinutes,
+            });
+
+            await setSetting("proxy_session_token", proxyToken, userId);
+
+            if (approved.slackChannel && approved.slackMessageTs) {
+              await slackClient.chat.update({
+                channel: approved.slackChannel,
+                ts: approved.slackMessageTs,
+                text: `Approved by <@${userId}>`,
+                attachments: [
+                  {
+                    color: "#2eb67d",
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `*✅ ${approved.title}*`,
+                        },
+                      },
+                      {
+                        type: "context",
+                        elements: [
+                          {
+                            type: "mrkdwn",
+                            text: `Approved by <@${userId}> · token TTL ${ttlMinutes}m`,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              });
+            }
+
+            if (approved.requestedInChannel && approved.requestedInThread) {
+              const grantedText = `Access to ${approved.credentialKey} granted. Use NOVA_PROXY_URL and NOVA_PROXY_TOKEN in your sandbox scripts. Token expires in ${ttlMinutes} minutes.`;
+              const syntheticEvent = {
+                type: "message" as const,
+                channel: approved.requestedInChannel,
+                ts: `${(Date.now() / 1000).toFixed(6)}`,
+                thread_ts: approved.requestedInThread,
+                text: grantedText,
+                user: approved.requestedBy,
+                channel_type: approved.requestedInChannel.startsWith("D")
+                  ? "im"
+                  : "channel",
+              };
+
+              await executionContext.run(
+                {
+                  triggeredBy: approved.requestedBy,
+                  triggerType: "user_message",
+                  channelId: approved.requestedInChannel,
+                  threadTs: approved.requestedInThread,
+                },
+                () =>
+                  runPipeline({
+                    event: syntheticEvent,
+                    client: slackClient,
+                    botUserId,
+                    teamId: payload.team?.id,
+                  }),
+              );
+            }
+
+            logger.info("Proxy session approval granted", {
+              approvalId,
+              credentialKey: approved.credentialKey,
+              requestedBy: approved.requestedBy,
+              approvedBy: userId,
+            });
+          } catch (err) {
+            recordError("interactions.proxy_approve", err, { userId, approvalId });
+            logger.error("Proxy approval handler failed", {
+              userId,
+              approvalId,
+              error: err,
+            });
+          }
+        })();
+        waitUntil(approvePromise);
+        continue;
+      }
+
+      if (action.action_id?.startsWith("proxy_reject_")) {
+        const approvalId = action.action_id.replace("proxy_reject_", "");
+        if (
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            approvalId,
+          )
+        ) {
+          logger.warn("Invalid proxy approvalId in action_id", {
+            actionId: action.action_id,
+          });
+          continue;
+        }
+
+        const rejectPromise = (async () => {
+          try {
+            const channelId = payload.channel?.id;
+            const approval = await loadAuthorizedPendingApproval({
+              approvalId,
+              userId,
+              channelId,
+              slackClient,
+              unauthorizedText:
+                "You're not authorized to reject this proxy access request.",
+            });
+            if (!approval) return;
+
+            const rejectedRows = await db
+              .update(approvals)
+              .set({
+                status: "rejected",
+                updatedAt: new Date(),
+              })
+              .where(and(eq(approvals.id, approvalId), eq(approvals.status, "pending")))
+              .returning();
+
+            if (rejectedRows.length === 0) {
+              await postEphemeralIfChannel(
+                slackClient,
+                channelId,
+                userId,
+                "This approval has already been processed.",
+              );
+              return;
+            }
+
+            if (approval.slackChannel && approval.slackMessageTs) {
+              await slackClient.chat.update({
+                channel: approval.slackChannel,
+                ts: approval.slackMessageTs,
+                text: `Rejected by <@${userId}>`,
+                attachments: [
+                  {
+                    color: "#e01e5a",
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `*❌ ${approval.title}*`,
+                        },
+                      },
+                      {
+                        type: "context",
+                        elements: [
+                          {
+                            type: "mrkdwn",
+                            text: `Rejected by <@${userId}>`,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              });
+            }
+
+            logger.info("Proxy session approval rejected", {
+              approvalId,
+              rejectedBy: userId,
+            });
+          } catch (err) {
+            recordError("interactions.proxy_reject", err, { userId, approvalId });
+            logger.error("Proxy rejection handler failed", {
+              userId,
+              approvalId,
+              error: err,
+            });
+          }
+        })();
+        waitUntil(rejectPromise);
         continue;
       }
 
