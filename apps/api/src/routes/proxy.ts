@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { waitUntil } from "@vercel/functions";
 import { verifyProxyToken } from "../lib/proxy-token.js";
 import { injectCredentialAuth } from "../lib/credential-auth.js";
@@ -9,7 +9,7 @@ import { credentialAuditLog } from "@aura/db/schema";
 
 export const proxyApp = new Hono();
 
-proxyApp.all("/:credentialKey{.+}", async (c) => {
+const proxyHandler = async (c: Context) => {
   const credentialKey = c.req.param("credentialKey");
   if (!credentialKey) {
     return c.json({ ok: false, error: "Missing credential key" }, 400);
@@ -188,4 +188,7 @@ proxyApp.all("/:credentialKey{.+}", async (c) => {
     status: upstreamResponse.status,
     headers: responseHeaders,
   });
-});
+};
+
+proxyApp.all("/:credentialKey", proxyHandler);
+proxyApp.all("/:credentialKey/*", proxyHandler);
