@@ -40,6 +40,10 @@ proxyApp.all("/:credentialKey/*", async (c) => {
     return c.json({ ok: false, error: "Missing target URL" }, 400);
   }
 
+  // Vercel's edge layer issues 308 redirects that collapse // to / in paths.
+  // Reconstruct the protocol double-slash if it was stripped.
+  targetUrl = targetUrl.replace(/^(https?:\/)([^/])/, "$1/$2");
+
   const requestUrl = new URL(c.req.url);
   if (requestUrl.search) {
     targetUrl = targetUrl.includes("?")
