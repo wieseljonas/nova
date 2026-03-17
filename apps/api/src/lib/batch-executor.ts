@@ -362,7 +362,15 @@ export async function executeBatchProposal(args: {
       error?: string;
     }> = [];
 
-    for (const item of itemRows) {
+    for (let i = 0; i < itemRows.length; i++) {
+      const item = itemRows[i];
+
+      // Rate-limit delay between requests (if configured)
+      // Skip on first iteration - we only want delay *between* requests
+      if (i > 0 && approval.delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, approval.delayMs));
+      }
+
       // Check circuit breaker
       if (recentFailures.length >= CIRCUIT_WINDOW) {
         const failureRate = recentFailures.filter(Boolean).length / CIRCUIT_WINDOW;
@@ -429,10 +437,6 @@ export async function executeBatchProposal(args: {
       // Trim circuit breaker window
       if (recentFailures.length > CIRCUIT_WINDOW) {
         recentFailures.shift();
-      }
-      // Rate-limit delay between requests (if configured)
-      if (approval.delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, approval.delayMs));
       }
 
       // Update approval progress
