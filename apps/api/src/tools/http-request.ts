@@ -1,7 +1,7 @@
 import dns from "node:dns/promises";
 import { z } from "zod";
 import { defineTool } from "../lib/tool.js";
-import { getApiCredentialWithType, getCredentialDisplayName } from "../lib/api-credentials.js";
+import { getApiCredentialWithType, getCredentialDisplayName, auditCredentialHttpUse } from "../lib/api-credentials.js";
 import { injectCredentialAuth } from "../lib/credential-auth.js";
 import { logger } from "../lib/logger.js";
 import type { ScheduleContext } from "@aura/db/schema";
@@ -76,6 +76,8 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           ),
       }),
       execute: async (input) => {
+        let credentialMeta: { id: string; name: string; userId: string } | null = null;
+
         try {
           const { hostname } = new URL(input.url);
           const resolved = await dns.resolve4(hostname).catch(() => [] as string[]);
@@ -115,6 +117,8 @@ export function createHttpRequestTool(context?: ScheduleContext) {
                 error: `Credential "${input.credential_name}" not found or expired`,
               };
             }
+
+            credentialMeta = { id: credResult.id, name: input.credential_name, userId: requestingUserId };
 
             try {
               if (credResult.authScheme === "query") {
@@ -165,6 +169,13 @@ export function createHttpRequestTool(context?: ScheduleContext) {
 
           const contentLength = parseInt(response.headers.get("content-length") ?? "0", 10);
           if (contentLength > MAX_RESPONSE_BYTES) {
+            if (credentialMeta) {
+              auditCredentialHttpUse(
+                credentialMeta.id, credentialMeta.name, credentialMeta.userId,
+                { method: input.method, url: input.url, headers: input.headers, body: input.body },
+                { status: response.status, error: `Response too large (${contentLength} bytes)` },
+              ).catch(() => {});
+            }
             return {
               ok: false as const,
               error: `Response too large (${contentLength} bytes). Maximum supported: ${MAX_RESPONSE_BYTES} bytes.`,
@@ -175,6 +186,19 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           const contentType = response.headers.get("content-type") ?? "";
           const text = await response.text().catch(() => "");
           const textBytes = Buffer.byteLength(text);
+          const responseHeaders = Object.fromEntries(response.headers.entries());
+
+          if (credentialMeta) {
+            let auditBody: unknown = text;
+            if (contentType.includes("application/json")) {
+              try { auditBody = JSON.parse(text); } catch { /* keep as text */ }
+            }
+            auditCredentialHttpUse(
+              credentialMeta.id, credentialMeta.name, credentialMeta.userId,
+              { method: input.method, url: input.url, headers: input.headers, body: input.body },
+              { status: response.status, headers: responseHeaders, body: auditBody },
+            ).catch(() => {});
+          }
 
           if (textBytes <= MAX_INLINE_BYTES) {
             let responseBody: unknown = text;
@@ -184,7 +208,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
             return {
               ok: response.ok as boolean,
               status: response.status,
-              headers: Object.fromEntries(response.headers.entries()),
+              headers: responseHeaders,
               body: responseBody,
             };
           }
@@ -193,7 +217,7 @@ export function createHttpRequestTool(context?: ScheduleContext) {
           const baseResult = {
             ok: response.ok as boolean,
             status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
+            headers: responseHeaders,
             body: preview,
             truncated: true as const,
             total_size_bytes: textBytes,
@@ -215,6 +239,13 @@ export function createHttpRequestTool(context?: ScheduleContext) {
 
           return { ...baseResult, save_error: "Sandbox unavailable; only preview available." };
         } catch (error: any) {
+          if (credentialMeta) {
+            auditCredentialHttpUse(
+              credentialMeta.id, credentialMeta.name, credentialMeta.userId,
+              { method: input.method, url: input.url, headers: input.headers, body: input.body },
+              { error: error.message },
+            ).catch(() => {});
+          }
           logger.error("http_request failed", { error: error.message, url: input.url });
           return { ok: false as const, error: `Request failed: ${error.message}` };
         }

@@ -195,7 +195,7 @@ export async function createProposal(args: CreateProposalArgs): Promise<{
     const resp = await slackClient.chat.postMessage({
       ...(requestedInThread && { thread_ts: requestedInThread }),
       channel: targetChannel,
-      text: `🔒 Approval required: ${title} — ${approverMentions}`,
+      text: "",
       attachments: [
         {
           color: riskColor,
@@ -310,11 +310,11 @@ export async function executeBatchProposal(args: {
     }
 
     // Get credential for requests
-    const { getApiCredentialWithType } = await import("./api-credentials.js");
+    const { getApiCredentialWithType, auditCredentialHttpUse } = await import("./api-credentials.js");
     let credential: ResolvedCredentialAuth | null = null;
+    let credentialId: string | null = null;
     if (approval.credentialKey && approval.credentialOwner) {
       try {
-        // Get credential value with type info
         const resolved = await getApiCredentialWithType(
           approval.credentialKey,
           approval.credentialOwner,
@@ -326,6 +326,7 @@ export async function executeBatchProposal(args: {
             `Credential with key '${approval.credentialKey}' owned by '${approval.credentialOwner}' not found or expired`,
           );
         }
+        credentialId = resolved.id;
         credential = {
           authScheme: resolved.authScheme,
           value: resolved.value,
@@ -420,6 +421,16 @@ export async function executeBatchProposal(args: {
         })
         .where(eq(approvalItems.id, item.id));
 
+      if (credentialId && approval.credentialKey && approval.credentialOwner) {
+        auditCredentialHttpUse(
+          credentialId,
+          approval.credentialKey,
+          approval.credentialOwner,
+          { method: item.method, url: item.url, headers: item.headers as Record<string, string> | undefined, body: item.body },
+          { status: executionResult.status, body: executionResult.body, error: executionResult.error },
+        ).catch(() => {});
+      }
+
       itemResults.push({
         sequenceNum: item.sequenceNum,
         method: item.method,
@@ -484,12 +495,8 @@ export async function executeBatchProposal(args: {
     });
 
     // ── Post results back to the original conversation thread ──────────────
-    // Include response bodies so the LLM can continue processing with actual data.
     if (slackClient && approval.requestedInChannel && approval.requestedInThread) {
       try {
-        const MAX_TOTAL = 38_000; // Slack limit is ~40K; leave headroom
-        const MAX_PER_ITEM = 4_000;
-
         const circuitBreakerNote = skippedByCircuitBreaker > 0
           ? `\n:octagonal_sign: *Circuit breaker tripped* — ${skippedByCircuitBreaker} item${skippedByCircuitBreaker > 1 ? "s" : ""} skipped after repeated 5xx server errors.`
           : "";
@@ -497,40 +504,49 @@ export async function executeBatchProposal(args: {
           ? `:warning: *${approval.title ?? "Batch"}* — Completed with ${failed} failure${failed > 1 ? "s" : ""} (${completed}/${itemRows.length} succeeded)${circuitBreakerNote}`
           : `:white_check_mark: *${approval.title ?? "Batch"}* — ${completed}/${itemRows.length} completed successfully`;
 
-        const parts: string[] = [];
-        let totalLength = summaryHeader.length;
-
-        for (const r of itemResults) {
-          let part: string;
-          if (r.ok && r.body !== undefined) {
-            const bodyStr = typeof r.body === "string" ? r.body : JSON.stringify(r.body, null, 2);
-            const truncatedBody = bodyStr.length > MAX_PER_ITEM
-              ? bodyStr.slice(0, MAX_PER_ITEM) + "\n… (truncated)"
-              : bodyStr;
-            part = `*Item ${r.sequenceNum}* (${r.method} → ${r.status}):\n\`\`\`\n${truncatedBody}\n\`\`\``;
-          } else if (r.ok) {
-            part = `*Item ${r.sequenceNum}*: ${r.method} → ${r.status} (empty response)`;
-          } else {
-            part = `*Item ${r.sequenceNum}*: :x: ${r.error ?? `HTTP ${r.status}`}`;
-          }
-
-          if (totalLength + part.length + 2 > MAX_TOTAL) {
-            const remaining = itemResults.length - parts.length;
-            parts.push(`_…and ${remaining} more item${remaining > 1 ? "s" : ""} (results stored in DB)_`);
-            break;
-          }
-          parts.push(part);
-          totalLength += part.length + 2;
+        const MAX_DISPLAY_ITEMS = 20;
+        const statusLines = itemResults.slice(0, MAX_DISPLAY_ITEMS).map((r) => {
+          const icon = r.ok ? "✅" : "❌";
+          const statusStr = r.status ? `\`${r.status}\`` : (r.error ?? "failed");
+          return `${icon} *Item ${r.sequenceNum}* · \`${r.method}\` → ${statusStr}`;
+        });
+        if (itemResults.length > MAX_DISPLAY_ITEMS) {
+          statusLines.push(`_…and ${itemResults.length - MAX_DISPLAY_ITEMS} more items_`);
         }
 
-        const fullMessage = parts.length > 0
-          ? `${summaryHeader}\n\n${parts.join("\n\n")}`
-          : summaryHeader;
+        const resultColor = failed > 0 ? "#e8912d" : "#2eb67d";
+        const resultBlocks: any[] = [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: summaryHeader },
+          },
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: statusLines.join("\n") },
+          },
+          {
+            type: "context",
+            elements: [{
+              type: "mrkdwn",
+              text: `Completed · ${completed + failed} / ${itemRows.length} items processed${failed > 0 ? ` · ${failed} failed` : ""}`,
+            }],
+          },
+          {
+            type: "actions",
+            elements: [{
+              type: "button",
+              text: { type: "plain_text", text: "📋 View Responses", emoji: true },
+              action_id: `batch_results_${approvalId}`,
+              value: approvalId,
+            }],
+          },
+        ];
 
         await slackClient.chat.postMessage({
           channel: approval.requestedInChannel,
           thread_ts: approval.requestedInThread,
-          text: fullMessage,
+          text: "",
+          attachments: [{ color: resultColor, blocks: resultBlocks }],
         });
 
         logger.info("Posted execution results to original thread", {
@@ -540,18 +556,33 @@ export async function executeBatchProposal(args: {
         });
 
         // Re-invoke the pipeline so the LLM can continue processing with results.
-        // Constructs a synthetic event that looks like a user message in the thread —
-        // the pipeline loads thread context (which now includes results) and the LLM continues.
+        // Pass results data directly in the synthetic event so the LLM has them
+        // without needing the raw JSON dumped visibly in the thread.
         try {
           const { runPipeline } = await import("../pipeline/index.js");
           const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
           const channelType = approval.requestedInChannel.startsWith("D") ? "im" : "channel";
+
+          const resultsPayload = itemResults.map(r => ({
+            item: r.sequenceNum,
+            method: r.method,
+            ok: r.ok,
+            status: r.status,
+            body: r.body,
+            error: r.error,
+          }));
+          const resultsJson = JSON.stringify(resultsPayload);
+          const MAX_SYNTHETIC = 30_000;
+          const truncatedResults = resultsJson.length > MAX_SYNTHETIC
+            ? resultsJson.slice(0, MAX_SYNTHETIC) + "… (truncated, full results in DB)"
+            : resultsJson;
+
           const syntheticEvent = {
             type: "message" as const,
             channel: approval.requestedInChannel,
             ts: `${(Date.now() / 1000).toFixed(6)}`,
             thread_ts: approval.requestedInThread,
-            text: `[Batch "${approval.title}" completed — results are in the thread above. Continue processing.]`,
+            text: `[Batch "${approval.title}" completed — ${completed}/${itemRows.length} succeeded. Results:\n${truncatedResults}\nContinue processing with these results.]`,
             user: approval.requestedBy,
             channel_type: channelType,
           };
@@ -748,7 +779,7 @@ async function updateApprovalCard(
     await slackClient.chat.update({
       channel: approval.slackChannel,
       ts: approval.slackMessageTs,
-      text: `${statusEmoji} ${approval.title} — ${statusText}`,
+      text: "",
       attachments: [
         {
           color,
