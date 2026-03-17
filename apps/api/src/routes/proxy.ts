@@ -9,7 +9,7 @@ import { credentialAuditLog } from "@aura/db/schema";
 
 export const proxyApp = new Hono();
 
-proxyApp.all("/:credentialKey{.+}", async (c) => {
+proxyApp.all("/:credentialKey/*", async (c) => {
   const credentialKey = c.req.param("credentialKey");
   if (!credentialKey) {
     return c.json({ ok: false, error: "Missing credential key" }, 400);
@@ -183,6 +183,7 @@ proxyApp.all("/:credentialKey{.+}", async (c) => {
   responseHeaders.delete("transfer-encoding");
   responseHeaders.delete("keep-alive");
   responseHeaders.delete("content-encoding");
+  responseHeaders.delete("content-length");
 
   return new Response(responseBody, {
     status: upstreamResponse.status,
