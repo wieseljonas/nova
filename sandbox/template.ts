@@ -43,11 +43,9 @@ export const auraTemplate = Template()
   .runCmd("sudo npm install -g vercel@latest")
   // Claude Code
   .runCmd("sudo npm install -g @anthropic-ai/claude-code")
-  // gcsfuse for GCS bucket mounts (reuse gcloud GPG key for the repo)
+  // gcsfuse — reuse the cloud.google.gpg keyring already created by the gcloud SDK step
   .runCmd(
-    "curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | " +
-      "sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.asc && " +
-      "echo 'deb [signed-by=/usr/share/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt gcsfuse-jammy main' | " +
+    "echo 'deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt gcsfuse-jammy main' | " +
       "sudo tee /etc/apt/sources.list.d/gcsfuse.list > /dev/null && " +
       "sudo apt-get update -qq && sudo apt-get install -y gcsfuse"
   )
