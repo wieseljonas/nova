@@ -156,7 +156,22 @@ async function setupSandboxFilesystem(
       `mountpoint -q ${mountPath} && echo mounted || echo not`,
       { timeoutMs: 5_000, envs },
     );
-    if (mountCheck.stdout?.trim() === "mounted") return;
+    if (mountCheck.stdout?.trim() === "mounted") {
+      // Verify the mount is actually functional (not stale after pause/resume).
+      // Use timeout(1) because ls on a dead FUSE mount can hang indefinitely.
+      const healthCheck = await sandbox.commands.run(
+        `timeout 5 ls ${mountPath} >/dev/null 2>&1 && echo ok || echo stale`,
+        { timeoutMs: 10_000, envs },
+      );
+      if (healthCheck.stdout?.trim() === "ok") return;
+
+      // Stale FUSE mount — unmount before remounting
+      logger.info("Stale GCS mount detected, unmounting before remount");
+      await sandbox.commands.run(
+        `sudo fusermount -u ${mountPath} 2>/dev/null || sudo umount -l ${mountPath} 2>/dev/null || true`,
+        { timeoutMs: 10_000, envs },
+      );
+    }
 
     if (!envs.GOOGLE_SA_KEY_B64) {
       logger.info("Skipping GCS mount — GOOGLE_SA_KEY_B64 not available");
