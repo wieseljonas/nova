@@ -1,3 +1,4 @@
+// test: verify only nova + nova-dashboard deploy (not aura)
 import * as nodePath from "node:path";
 import { getSetting, setSetting } from "./settings.js";
 import { getCredential, decryptCredential } from "./credentials.js";
