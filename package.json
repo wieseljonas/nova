@@ -7,6 +7,9 @@
     "db:push": "pnpm --filter @aura/db db:push",
     "db:studio": "pnpm --filter @aura/db db:studio"
   },
+  "devDependencies": {
+    "e2b": "^2.12.1"
+  },
   "pnpm": {
     "overrides": {
       "e2b>chalk": "4.1.2"
