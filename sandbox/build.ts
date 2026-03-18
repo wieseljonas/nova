@@ -6,11 +6,13 @@
  *
  * After a successful build, set E2B_TEMPLATE_ID in Vercel env vars.
  */
-import "dotenv/config";
 import { Template, defaultBuildLogger } from "e2b";
 import { auraTemplate } from "./template.js";
 
 async function main() {
+  // dotenv is only needed locally; in CI env vars come from GitHub secrets
+  try { await import("dotenv/config"); } catch {}
+
   const isProd = process.argv.includes("--prod");
   const tag = isProd ? "aura-sandbox" : "aura-sandbox-dev";
 
