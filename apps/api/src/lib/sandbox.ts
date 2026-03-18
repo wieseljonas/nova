@@ -197,7 +197,7 @@ async function setupSandboxFilesystem(
     }
 
     const mountResult = await sandbox.commands.run(
-      `touch /tmp/gcs-sa-key.json && chmod 600 /tmp/gcs-sa-key.json && echo "$GOOGLE_SA_KEY_B64" | base64 -d > /tmp/gcs-sa-key.json && sudo mkdir -p ${mountPath} && gcsfuse --key-file=/tmp/gcs-sa-key.json --implicit-dirs ${bucketName} ${mountPath}; EXIT=$?; rm -f /tmp/gcs-sa-key.json; exit $EXIT`,
+      `touch /tmp/gcs-sa-key.json && chmod 600 /tmp/gcs-sa-key.json && echo "$GOOGLE_SA_KEY_B64" | base64 -d > /tmp/gcs-sa-key.json && sudo mkdir -p ${mountPath} && sudo chmod 666 /dev/fuse 2>/dev/null && sudo chown $(id -u):$(id -g) ${mountPath} && gcsfuse --key-file=/tmp/gcs-sa-key.json --implicit-dirs ${bucketName} ${mountPath}; EXIT=$?; rm -f /tmp/gcs-sa-key.json; exit $EXIT`,
       { timeoutMs: 30_000, envs },
     );
     if (mountResult.exitCode !== 0) {
