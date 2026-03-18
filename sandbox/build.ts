@@ -6,7 +6,6 @@
  *
  * After a successful build, set E2B_TEMPLATE_ID in Vercel env vars.
  */
-import "dotenv/config";
 import { Template, defaultBuildLogger } from "e2b";
 import { auraTemplate } from "./template.js";
 

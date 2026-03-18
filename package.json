@@ -1,6 +1,7 @@
 {
   "name": "nova-monorepo",
   "private": true,
+  "packageManager": "pnpm@10.32.0",
   "scripts": {
     "db:generate": "pnpm --filter @aura/db db:generate",
     "db:migrate": "pnpm --filter @aura/db db:migrate",
