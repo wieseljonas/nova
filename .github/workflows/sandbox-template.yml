@@ -31,4 +31,5 @@ jobs:
       - name: Build sandbox template
         env:
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          NODE_PATH: ${{ github.workspace }}/apps/api/node_modules
         run: npx tsx sandbox/build.ts --prod
