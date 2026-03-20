@@ -225,6 +225,7 @@ export function createRecipeTools(
             .onConflictDoUpdate({
               target: jobs.name,
               set: updateSet,
+              where: isNotNull(jobs.recipeCommand),
             });
 
           const timeStr = executeAt?.toISOString() ?? "next cron window";

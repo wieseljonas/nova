@@ -35,9 +35,8 @@ export function clampRecipeTimeoutSeconds(
   timeoutSeconds: number | null | undefined,
 ): number {
   const value = timeoutSeconds ?? 600;
-  if (value < 10 || value > 750) {
-    throw new Error("recipe timeout must be between 10 and 750 seconds.");
-  }
+  if (value < 10) return 10;
+  if (value > 750) return 750;
   return value;
 }
 
