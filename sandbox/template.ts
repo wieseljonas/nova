@@ -1,4 +1,3 @@
-// Trigger rebuild
 /**
  * Nova sandbox template — pre-baked environment with all tools Nova needs.
  *

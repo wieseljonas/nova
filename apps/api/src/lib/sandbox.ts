@@ -182,7 +182,7 @@ async function setupSandboxFilesystem(
       timeoutMs: 5_000,
     });
     if (gcsfuseCheck.exitCode !== 0) {
-      const distro = "bookworm";
+      const distro = "jammy";
       const installResult = await sandbox.commands.run(
         `echo "deb [signed-by=/usr/share/keyrings/cloud.google.asc] https://packages.cloud.google.com/apt gcsfuse-${distro} main" | sudo tee /etc/apt/sources.list.d/gcsfuse.list && curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo tee /usr/share/keyrings/cloud.google.asc > /dev/null && sudo apt-get update -qq && sudo apt-get install -y -qq gcsfuse`,
         { timeoutMs: 60_000, envs },
