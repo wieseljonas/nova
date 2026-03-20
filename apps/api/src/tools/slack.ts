@@ -5,6 +5,7 @@ import { defineTool, binaryToModelOutput, registerToolNames } from "../lib/tool.
 import { isAdmin } from "../lib/permissions.js";
 import { createNoteTools } from "./notes.js";
 import { createJobTools } from "./jobs.js";
+import { createRecipeTools } from "./recipes.js";
 import { createListWriteTools } from "./lists.js";
 import { createSandboxTools } from "./sandbox.js";
 import { createBrowserTools } from "./browser.js";
@@ -2961,6 +2962,9 @@ export async function createSlackTools(client: WebClient, context?: ScheduleCont
 
     // ── Job Tools (unified: one-shots, recurring, continuations) ─────────
     ...createJobTools(client, context),
+
+    // ── Recipe Tools (deterministic code execution jobs) ─────────────────
+    ...createRecipeTools(client, context),
 
     // ── Web Tools ────────────────────────────────────────────────────────
     ...createWebTools(),
