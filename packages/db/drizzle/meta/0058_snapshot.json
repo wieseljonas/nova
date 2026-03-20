@@ -2386,6 +2386,25 @@
           "notNull": false,
           "default": "'[]'::jsonb"
         },
+        "recipe_root": {
+          "name": "recipe_root",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recipe_command": {
+          "name": "recipe_command",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recipe_timeout_seconds": {
+          "name": "recipe_timeout_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 600
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
