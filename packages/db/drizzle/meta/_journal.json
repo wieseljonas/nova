@@ -414,6 +414,13 @@
       "when": 1774350000000,
       "tag": "0058_recipe_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1774351000000,
+      "tag": "0059_recipe_proxy_access",
+      "breakpoints": true
     }
   ]
 }

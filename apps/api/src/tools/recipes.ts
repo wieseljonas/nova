@@ -1,11 +1,16 @@
 import { defineTool } from "../lib/tool.js";
 import { z } from "zod";
-import { eq, and, desc, isNotNull } from "drizzle-orm";
+import { eq, and, desc, isNotNull, inArray } from "drizzle-orm";
 import type { WebClient } from "@slack/web-api";
 import { CronExpressionParser } from "cron-parser";
 import { waitUntil } from "@vercel/functions";
 import { db } from "../db/client.js";
-import { jobs, jobExecutions } from "@aura/db/schema";
+import {
+  jobs,
+  jobExecutions,
+  credentials,
+  recipeProxyGrants,
+} from "@aura/db/schema";
 import type { FrequencyConfig, ScheduleContext } from "@aura/db/schema";
 import { isAdmin } from "../lib/permissions.js";
 import { logger } from "../lib/logger.js";
@@ -33,7 +38,7 @@ export function createRecipeTools(
   return {
     publish_recipe: defineTool({
       description:
-        "Publish (create or update) a deterministic recipe job after validating it with run_command in /mnt/gcs/recipes/<name>/. A recipe runs directly in the sandbox using recipe_command, without LLM interpretation. Use this for repeatable code workflows (syncs, upserts, batch updates).",
+        "Publish (create or update) a deterministic recipe job after validating it with run_command in /mnt/gcs/recipes/<name>/. A recipe runs directly in the sandbox using recipe_command, without LLM interpretation. Use this for repeatable code workflows (syncs, upserts, batch updates). Proxy credential flow: set proxy_mode ('off', 'one_shot', 'recurring_auto') and proxy_credential_keys when proxy_mode is not 'off'.",
       inputSchema: z.object({
         name: z
           .string()
@@ -85,6 +90,31 @@ export function createRecipeTools(
           .max(750)
           .default(600)
           .describe("Recipe command timeout in seconds."),
+        proxy_mode: z
+          .enum(["off", "one_shot", "recurring_auto"])
+          .default("off")
+          .describe(
+            "Proxy mode: off (no proxy credential), one_shot (manual/one-off runs), recurring_auto (allow recurring runs to mint short-lived proxy tokens automatically).",
+          ),
+        proxy_credential_keys: z
+          .array(
+            z
+              .string()
+              .regex(
+                /^[a-z][a-z0-9_]{1,62}$/,
+                "Use lowercase letters, numbers, and _. Start with a letter.",
+              ),
+          )
+          .default([])
+          .describe(
+            "Credential keys allowed for proxy calls when proxy_mode is not 'off'.",
+          ),
+        proxy_credential_owner: z
+          .string()
+          .optional()
+          .describe(
+            "Slack user ID of the credential owner. Defaults to the publishing user. All keys must belong to this owner.",
+          ),
         min_interval_hours: z.number().optional(),
         max_per_day: z.number().optional(),
       }),
@@ -99,6 +129,9 @@ export function createRecipeTools(
         timezone,
         priority,
         timeout_seconds,
+        proxy_mode,
+        proxy_credential_keys,
+        proxy_credential_owner,
         min_interval_hours,
         max_per_day,
       }) => {
@@ -162,6 +195,77 @@ export function createRecipeTools(
             };
           }
 
+          const credentialKeys = [
+            ...new Set(
+              (proxy_credential_keys || []).map((k) => k.trim()).filter(Boolean),
+            ),
+          ];
+          if (proxy_mode === "off" && credentialKeys.length > 0) {
+            return {
+              ok: false,
+              error:
+                "proxy_credential_keys were provided but proxy_mode is 'off'. Either remove keys or set proxy_mode.",
+            };
+          }
+          if (proxy_mode !== "off" && credentialKeys.length === 0) {
+            return {
+              ok: false,
+              error:
+                "proxy_credential_keys is required when proxy_mode is not 'off'.",
+            };
+          }
+          if (proxy_mode === "one_shot" && recurring) {
+            return {
+              ok: false,
+              error:
+                "Recurring recipes cannot use proxy_mode='one_shot'. Use proxy_mode='recurring_auto'.",
+            };
+          }
+
+          const credentialOwner =
+            proxy_mode === "off"
+              ? null
+              : proxy_credential_owner || context?.userId || null;
+          if (proxy_mode !== "off" && !credentialOwner) {
+            return {
+              ok: false,
+              error:
+                "proxy_credential_owner is required when proxy_mode is enabled outside user context.",
+            };
+          }
+
+          let proxyCredentials:
+            | Array<{ id: string; key: string; owner: string }>
+            | null = null;
+          if (proxy_mode !== "off") {
+            const credRows = await db
+              .select({
+                id: credentials.id,
+                key: credentials.key,
+              })
+              .from(credentials)
+              .where(
+                and(
+                  eq(credentials.ownerUserId, credentialOwner!),
+                  inArray(credentials.key, credentialKeys),
+                ),
+              );
+            const byKey = new Map(credRows.map((r) => [r.key, r]));
+            const missingKeys = credentialKeys.filter((key) => !byKey.has(key));
+            if (missingKeys.length > 0) {
+              return {
+                ok: false,
+                error:
+                  `Credential(s) not found for owner "${credentialOwner}": ${missingKeys.join(", ")}.`,
+              };
+            }
+            proxyCredentials = credentialKeys.map((key) => ({
+              id: byKey.get(key)!.id,
+              key,
+              owner: credentialOwner!,
+            }));
+          }
+
           const sandbox = await getOrCreateSandbox();
           const envs = await getSandboxEnvs();
           const rootCheck = await sandbox.commands.run(`test -d "${recipeRoot}" && echo ok || echo missing`, {
@@ -193,6 +297,10 @@ export function createRecipeTools(
             recipeRoot,
             recipeCommand,
             recipeTimeoutSeconds: timeoutSeconds,
+            recipeProxyMode: proxy_mode,
+            requiredCredentialIds: proxyCredentials
+              ? proxyCredentials.map((c) => c.id)
+              : [],
             playbook: null,
           };
           if (recurring !== undefined) updateSet.cronSchedule = recurring || null;
@@ -220,6 +328,10 @@ export function createRecipeTools(
               recipeRoot,
               recipeCommand,
               recipeTimeoutSeconds: timeoutSeconds,
+              recipeProxyMode: proxy_mode,
+              requiredCredentialIds: proxyCredentials
+                ? proxyCredentials.map((c) => c.id)
+                : [],
               updatedAt: new Date(),
             })
             .onConflictDoUpdate({
@@ -227,16 +339,74 @@ export function createRecipeTools(
               set: updateSet,
             });
 
+          const currentJobRows = await db
+            .select({ id: jobs.id })
+            .from(jobs)
+            .where(eq(jobs.name, name))
+            .limit(1);
+          const currentJob = currentJobRows[0];
+          if (!currentJob) {
+            return { ok: false, error: "Recipe created but could not reload job." };
+          }
+
+          if (proxy_mode === "off") {
+            await db
+              .update(recipeProxyGrants)
+              .set({
+                status: "revoked",
+                updatedAt: new Date(),
+              })
+              .where(eq(recipeProxyGrants.jobId, currentJob.id));
+          } else {
+            const approver = context?.userId || "aura";
+            await db
+              .insert(recipeProxyGrants)
+              .values({
+                jobId: currentJob.id,
+                credentialOwnerUserId: credentialOwner!,
+                credentialIds: proxyCredentials!.map((c) => c.id),
+                credentialKeys: proxyCredentials!.map((c) => c.key),
+                proxyMode: proxy_mode,
+                status: "active",
+                approvedBy: approver,
+                approvedAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .onConflictDoUpdate({
+                target: recipeProxyGrants.jobId,
+                set: {
+                  credentialOwnerUserId: credentialOwner!,
+                  credentialIds: proxyCredentials!.map((c) => c.id),
+                  credentialKeys: proxyCredentials!.map((c) => c.key),
+                  proxyMode: proxy_mode,
+                  status: "active",
+                  approvedBy: approver,
+                  approvedAt: new Date(),
+                  updatedAt: new Date(),
+                },
+              });
+          }
+
           const timeStr = executeAt?.toISOString() ?? "next cron window";
+          const credentialText = proxyCredentials
+            ? recurring
+              ? ` Proxy grant approved (${proxy_mode}) for ${proxyCredentials.length} credential(s): ${proxyCredentials.map((c) => c.key).join(", ")}. Recurring runs will mint short-lived NOVA_PROXY_TOKEN automatically.`
+              : ` Proxy grant approved (${proxy_mode}) for credential(s): ${proxyCredentials.map((c) => c.key).join(", ")}.`
+            : "";
           return {
             ok: true,
             message:
               `Recipe "${name}" published. First execution: ${timeStr}.` +
-              (channelId ? ` Posts to ${channelLabel}.` : ""),
+              (channelId ? ` Posts to ${channelLabel}.` : "") +
+              credentialText,
             name,
             recipe_root: recipeRoot,
             recipe_command: recipeCommand,
             execute_at: timeStr,
+            proxy_mode,
+            proxy_credentials: proxyCredentials
+              ? proxyCredentials.map((c) => ({ key: c.key, owner: c.owner }))
+              : null,
           };
         } catch (error: any) {
           logger.error("publish_recipe failed", { error: error.message });
@@ -280,6 +450,9 @@ export function createRecipeTools(
             recipe_root: j.recipeRoot,
             recipe_command: j.recipeCommand,
             recipe_timeout_seconds: j.recipeTimeoutSeconds,
+            proxy_mode: j.recipeProxyMode,
+            proxy_credential_count: j.requiredCredentialIds?.length ?? 0,
+            uses_proxy_credentials: (j.requiredCredentialIds?.length ?? 0) > 0,
             status: j.status,
             enabled: j.enabled === 1,
             cron_schedule: j.cronSchedule,
@@ -329,6 +502,22 @@ export function createRecipeTools(
             .orderBy(desc(jobExecutions.startedAt))
             .limit(trace_limit);
 
+          const grantRows = await db
+            .select({
+              status: recipeProxyGrants.status,
+              proxyMode: recipeProxyGrants.proxyMode,
+              credentialOwnerUserId: recipeProxyGrants.credentialOwnerUserId,
+              credentialKeys: recipeProxyGrants.credentialKeys,
+              approvedBy: recipeProxyGrants.approvedBy,
+              approvedAt: recipeProxyGrants.approvedAt,
+              lastUsedAt: recipeProxyGrants.lastUsedAt,
+              useCount: recipeProxyGrants.useCount,
+            })
+            .from(recipeProxyGrants)
+            .where(eq(recipeProxyGrants.jobId, recipe.id))
+            .limit(1);
+          const grant = grantRows[0];
+
           return {
             ok: true,
             recipe: {
@@ -338,6 +527,10 @@ export function createRecipeTools(
               recipe_root: recipe.recipeRoot,
               recipe_command: recipe.recipeCommand,
               recipe_timeout_seconds: recipe.recipeTimeoutSeconds,
+              proxy_mode: recipe.recipeProxyMode,
+              proxy_credential_count: recipe.requiredCredentialIds?.length ?? 0,
+              uses_proxy_credentials:
+                (recipe.requiredCredentialIds?.length ?? 0) > 0,
               status: recipe.status,
               enabled: recipe.enabled === 1,
               cron_schedule: recipe.cronSchedule,
@@ -345,6 +538,18 @@ export function createRecipeTools(
               last_executed_at: recipe.lastExecutedAt?.toISOString() || null,
               execution_count: recipe.executionCount,
             },
+            proxy_grant: grant
+              ? {
+                  status: grant.status,
+                  proxy_mode: grant.proxyMode,
+                  credential_owner: grant.credentialOwnerUserId,
+                  credential_keys: grant.credentialKeys,
+                  approved_by: grant.approvedBy,
+                  approved_at: grant.approvedAt?.toISOString() || null,
+                  last_used_at: grant.lastUsedAt?.toISOString() || null,
+                  use_count: grant.useCount,
+                }
+              : null,
             executions: executions.map((e) => ({
               id: e.id,
               status: e.status,
