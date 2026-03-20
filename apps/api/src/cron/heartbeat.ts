@@ -6,7 +6,7 @@ import { jobs, notes, jobExecutions } from "@aura/db/schema";
 import type { FrequencyConfig } from "@aura/db/schema";
 import { logger } from "../lib/logger.js";
 import { executeJob, MAX_RETRIES } from "./execute-job.js";
-import { runRecipe } from "./run-recipe.js";
+import { runRecipe, pollRunningRecipes } from "./run-recipe.js";
 
 /** Max jobs to process per heartbeat sweep */
 const MAX_JOBS_PER_SWEEP = 10;
@@ -89,6 +89,12 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
   let plansExpired = 0;
   let plansAbandoned = 0;
   let staleRunningRecovered = 0;
+  let recipePollStats = {
+    checked: 0,
+    running: 0,
+    completed: 0,
+    failed: 0,
+  };
 
   try {
     const now = new Date();
@@ -158,7 +164,19 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
       logger.info(`Heartbeat: no jobs due (${pendingJobs.length} pending)`);
     }
 
-    // ── 3. Expire stale plan notes ───────────────────────────────────────
+    // ── 3. Poll running recipe processes ─────────────────────────────────
+
+    try {
+      recipePollStats = await pollRunningRecipes();
+      if (recipePollStats.checked > 0) {
+        logger.info("Heartbeat: polled running recipes", recipePollStats);
+      }
+    } catch (pollErr: any) {
+      logger.error("Heartbeat: recipe polling failed", { error: pollErr.message });
+      failed++;
+    }
+
+    // ── 4. Expire stale plan notes ───────────────────────────────────────
 
     const expireResult = await db
       .delete(notes)
@@ -172,7 +190,7 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
       });
     }
 
-    // ── 4. Flag abandoned plans ──────────────────────────────────────────
+    // ── 5. Flag abandoned plans ──────────────────────────────────────────
 
     const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const stalePlans = await db
@@ -193,7 +211,7 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
       });
     }
 
-    // ── 5. Recover jobs stuck in "running" ─────────────────────────────
+    // ── 6. Recover non-recipe jobs stuck in "running" ───────────────────
 
     const staleRunningCutoff = new Date(Date.now() - STALE_RUNNING_THRESHOLD_MS);
     const staleRunning = await db
@@ -206,6 +224,7 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
       .where(
         and(
           eq(jobs.status, "running"),
+          isNull(jobs.recipeCommand),
           lt(jobs.updatedAt, staleRunningCutoff),
           lt(jobs.retries, MAX_RETRIES),
         ),
@@ -222,6 +241,7 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
       .where(
         and(
           eq(jobs.status, "running"),
+          isNull(jobs.recipeCommand),
           lt(jobs.updatedAt, staleRunningCutoff),
         ),
       )
@@ -269,9 +289,19 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
       plansExpired,
       plansAbandoned,
       staleRunningRecovered,
+      recipePollStats,
     });
 
-    return c.json({ ok: true, executed, failed, plansExpired, plansAbandoned, staleRunningRecovered, duration });
+    return c.json({
+      ok: true,
+      executed,
+      failed,
+      plansExpired,
+      plansAbandoned,
+      staleRunningRecovered,
+      recipePollStats,
+      duration,
+    });
   } catch (error: any) {
     logger.error("Heartbeat failed", { error: error.message });
     return c.json({ error: "Heartbeat failed" }, 500);
