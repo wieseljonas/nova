@@ -223,24 +223,25 @@ ${recipeCommand}
       async () => {
         const sandbox = await getOrCreateSandbox();
         const envs = await getSandboxEnvs();
-        const proxyEnvs = await buildRecipeProxyEnvs(
-          job,
-          executionId,
-          timeoutSeconds,
-        );
-        const runEnvs = { ...envs, ...proxyEnvs };
 
         // Guardrail: root must exist at publish/runtime.
         const rootCheck = await sandbox.commands.run(
           `test -d "${recipeRoot}" && echo ok || echo missing`,
           {
             timeoutMs: 5_000,
-            envs: runEnvs,
+            envs,
           },
         );
         if (rootCheck.stdout?.trim() !== "ok") {
           throw new Error(`Recipe root does not exist: ${recipeRoot}`);
         }
+
+        const proxyEnvs = await buildRecipeProxyEnvs(
+          job,
+          executionId,
+          timeoutSeconds,
+        );
+        const runEnvs = { ...envs, ...proxyEnvs };
 
         await sandbox.files.write(runnerScriptPath, runnerScript);
         return sandbox.commands.run(

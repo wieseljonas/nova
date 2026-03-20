@@ -311,70 +311,59 @@ export function createRecipeTools(
           updateSet.timezone = timezone;
           updateSet.priority = priority;
 
-          await db
-            .insert(jobs)
-            .values({
-              name,
-              description,
-              playbook: null,
-              cronSchedule: recurring || null,
-              frequencyConfig,
-              channelId: channelId || context?.channelId || "",
-              threadTs: !recurring ? (context?.threadTs || null) : null,
-              executeAt,
-              requestedBy,
-              timezone,
-              priority,
-              recipeRoot,
-              recipeCommand,
-              recipeTimeoutSeconds: timeoutSeconds,
-              recipeProxyMode: proxy_mode,
-              requiredCredentialIds: proxyCredentials
-                ? proxyCredentials.map((c) => c.id)
-                : [],
-              updatedAt: new Date(),
-            })
-            .onConflictDoUpdate({
-              target: jobs.name,
-              set: updateSet,
-            });
-
-          const currentJobRows = await db
-            .select({ id: jobs.id })
-            .from(jobs)
-            .where(eq(jobs.name, name))
-            .limit(1);
-          const currentJob = currentJobRows[0];
-          if (!currentJob) {
-            return { ok: false, error: "Recipe created but could not reload job." };
-          }
-
-          if (proxy_mode === "off") {
-            await db
-              .update(recipeProxyGrants)
-              .set({
-                status: "revoked",
-                updatedAt: new Date(),
-              })
-              .where(eq(recipeProxyGrants.jobId, currentJob.id));
-          } else {
-            const approver = context?.userId || "aura";
-            await db
-              .insert(recipeProxyGrants)
+          await db.transaction(async (tx) => {
+            await tx
+              .insert(jobs)
               .values({
-                jobId: currentJob.id,
-                credentialOwnerUserId: credentialOwner!,
-                credentialIds: proxyCredentials!.map((c) => c.id),
-                credentialKeys: proxyCredentials!.map((c) => c.key),
-                proxyMode: proxy_mode,
-                status: "active",
-                approvedBy: approver,
-                approvedAt: new Date(),
+                name,
+                description,
+                playbook: null,
+                cronSchedule: recurring || null,
+                frequencyConfig,
+                channelId: channelId || context?.channelId || "",
+                threadTs: !recurring ? (context?.threadTs || null) : null,
+                executeAt,
+                requestedBy,
+                timezone,
+                priority,
+                recipeRoot,
+                recipeCommand,
+                recipeTimeoutSeconds: timeoutSeconds,
+                recipeProxyMode: proxy_mode,
+                requiredCredentialIds: proxyCredentials
+                  ? proxyCredentials.map((c) => c.id)
+                  : [],
                 updatedAt: new Date(),
               })
               .onConflictDoUpdate({
-                target: recipeProxyGrants.jobId,
-                set: {
+                target: jobs.name,
+                set: updateSet,
+              });
+
+            const currentJobRows = await tx
+              .select({ id: jobs.id })
+              .from(jobs)
+              .where(eq(jobs.name, name))
+              .limit(1);
+            const currentJob = currentJobRows[0];
+            if (!currentJob) {
+              throw new Error("Recipe created but could not reload job.");
+            }
+
+            if (proxy_mode === "off") {
+              await tx
+                .update(recipeProxyGrants)
+                .set({
+                  status: "revoked",
+                  updatedAt: new Date(),
+                })
+                .where(eq(recipeProxyGrants.jobId, currentJob.id));
+            } else {
+              const approver = context?.userId || "aura";
+              await tx
+                .insert(recipeProxyGrants)
+                .values({
+                  jobId: currentJob.id,
                   credentialOwnerUserId: credentialOwner!,
                   credentialIds: proxyCredentials!.map((c) => c.id),
                   credentialKeys: proxyCredentials!.map((c) => c.key),
@@ -383,9 +372,22 @@ export function createRecipeTools(
                   approvedBy: approver,
                   approvedAt: new Date(),
                   updatedAt: new Date(),
-                },
-              });
-          }
+                })
+                .onConflictDoUpdate({
+                  target: recipeProxyGrants.jobId,
+                  set: {
+                    credentialOwnerUserId: credentialOwner!,
+                    credentialIds: proxyCredentials!.map((c) => c.id),
+                    credentialKeys: proxyCredentials!.map((c) => c.key),
+                    proxyMode: proxy_mode,
+                    status: "active",
+                    approvedBy: approver,
+                    approvedAt: new Date(),
+                    updatedAt: new Date(),
+                  },
+                });
+            }
+          });
 
           const timeStr = executeAt?.toISOString() ?? "next cron window";
           const credentialText = proxyCredentials
@@ -452,7 +454,6 @@ export function createRecipeTools(
             recipe_timeout_seconds: j.recipeTimeoutSeconds,
             proxy_mode: j.recipeProxyMode,
             proxy_credential_count: j.requiredCredentialIds?.length ?? 0,
-            uses_proxy_credentials: (j.requiredCredentialIds?.length ?? 0) > 0,
             status: j.status,
             enabled: j.enabled === 1,
             cron_schedule: j.cronSchedule,
@@ -529,8 +530,6 @@ export function createRecipeTools(
               recipe_timeout_seconds: recipe.recipeTimeoutSeconds,
               proxy_mode: recipe.recipeProxyMode,
               proxy_credential_count: recipe.requiredCredentialIds?.length ?? 0,
-              uses_proxy_credentials:
-                (recipe.requiredCredentialIds?.length ?? 0) > 0,
               status: recipe.status,
               enabled: recipe.enabled === 1,
               cron_schedule: recipe.cronSchedule,
