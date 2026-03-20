@@ -11,6 +11,8 @@ import { executionContext } from "./tool.js";
 const SANDBOX_NOTE_KEY = "e2b_sandbox_id";
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const RECIPE_ACTIVE_TIMEOUT_MS = 15 * 60 * 1000;
+const CACHED_SANDBOX_TOUCH_TIMEOUT_MS = 10_000;
+const SANDBOX_RESUME_TIMEOUT_MS = 20_000;
 
 /** Per-invocation cache -- reuse the same sandbox within a single request */
 let cachedSandbox: any | null = null;
@@ -69,6 +71,28 @@ export function clearCachedSandbox(): void {
 async function loadE2B() {
   const { Sandbox } = await import("e2b");
   return Sandbox;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 /**
@@ -255,9 +279,17 @@ export async function getOrCreateSandbox(): Promise<any> {
   if (cachedSandbox) {
     try {
       // Reset timeout to keep it alive
-      await cachedSandbox.setTimeout(DEFAULT_TIMEOUT_MS);
+      await withTimeout(
+        cachedSandbox.setTimeout(DEFAULT_TIMEOUT_MS),
+        CACHED_SANDBOX_TOUCH_TIMEOUT_MS,
+        "cachedSandbox.setTimeout",
+      );
       return cachedSandbox;
-    } catch {
+    } catch (error: any) {
+      logger.warn("Cached sandbox not reusable, creating/resuming fresh sandbox", {
+        sandboxId: cachedSandbox?.sandboxId,
+        error: error.message,
+      });
       cachedSandbox = null;
     }
   }
@@ -277,14 +309,22 @@ export async function getOrCreateSandbox(): Promise<any> {
   if (savedId) {
     try {
       logger.info("Resuming E2B sandbox", { sandboxId: savedId });
-      const sandbox = await Sandbox.connect(savedId, {
-        timeoutMs: DEFAULT_TIMEOUT_MS,
-      });
+      const sandbox = await withTimeout(
+        Sandbox.connect(savedId, {
+          timeoutMs: SANDBOX_RESUME_TIMEOUT_MS,
+        }),
+        SANDBOX_RESUME_TIMEOUT_MS + 2_000,
+        `Sandbox.connect(${savedId})`,
+      );
 
       // Health check: verify the sandbox is actually responsive
-      const healthCheck = await sandbox.commands.run("echo ok", {
-        timeoutMs: 5_000,
-      });
+      const healthCheck = await withTimeout(
+        sandbox.commands.run("echo ok", {
+          timeoutMs: 5_000,
+        }),
+        7_000,
+        "sandbox resume health check",
+      );
       if (healthCheck.exitCode !== 0) {
         throw new Error("Health check failed after resume");
       }
@@ -296,6 +336,14 @@ export async function getOrCreateSandbox(): Promise<any> {
         savedId,
         error: error.message,
       });
+      try {
+        await setSetting(SANDBOX_NOTE_KEY, "", "system");
+      } catch (clearErr: any) {
+        logger.warn("Failed to clear stale sandbox ID after resume error", {
+          savedId,
+          error: clearErr.message,
+        });
+      }
     }
 
     if (cachedSandbox) {
