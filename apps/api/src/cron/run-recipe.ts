@@ -108,7 +108,7 @@ async function buildRecipeProxyEnvs(
     .update(recipeProxyGrants)
     .set({
       lastUsedAt: now,
-      useCount: grant.useCount + 1,
+      useCount: sql`${recipeProxyGrants.useCount} + 1`,
       updatedAt: now,
     })
     .where(eq(recipeProxyGrants.id, grant.id));
