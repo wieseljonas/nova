@@ -327,6 +327,8 @@ export interface FrequencyConfig {
   cooldownHours?: number;
 }
 
+export type RecipeProxyMode = "off" | "one_shot" | "recurring_auto";
+
 export const jobs = pgTable(
   "jobs",
   {
@@ -357,6 +359,10 @@ export const jobs = pgTable(
     recipeRoot: text("recipe_root"),
     recipeCommand: text("recipe_command"),
     recipeTimeoutSeconds: integer("recipe_timeout_seconds").notNull().default(600),
+    recipeProxyMode: text("recipe_proxy_mode")
+      .$type<RecipeProxyMode>()
+      .notNull()
+      .default("off"),
     createdAt: timestamptz("created_at").notNull().defaultNow(),
     updatedAt: timestamptz("updated_at").notNull().defaultNow(),
   },
@@ -390,6 +396,46 @@ export const jobExecutions = pgTable(
   (table) => [
     index("job_executions_job_id_idx").on(table.jobId),
     index("job_executions_started_at_idx").on(table.startedAt),
+  ],
+);
+
+// ── Recipe Proxy Grants (approved once, reused for recurring runs) ──────────
+
+export const recipeProxyGrants = pgTable(
+  "recipe_proxy_access",
+  {
+    id: uuid("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    jobId: uuid("job_id")
+      .notNull()
+      .references(() => jobs.id, { onDelete: "cascade" }),
+    credentialOwnerUserId: text("credential_owner_user_id").notNull(),
+    credentialIds: jsonb("credential_ids").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    credentialKeys: jsonb("credential_keys").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    proxyMode: text("proxy_mode")
+      .$type<Exclude<RecipeProxyMode, "off">>()
+      .notNull(),
+    status: text("status").$type<"active" | "revoked">().notNull().default("active"),
+    approvedBy: text("approved_by").notNull(),
+    approvedAt: timestamptz("approved_at").notNull().defaultNow(),
+    lastUsedAt: timestamptz("last_used_at"),
+    useCount: integer("use_count").notNull().default(0),
+    createdAt: timestamptz("created_at").notNull().defaultNow(),
+    updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("recipe_proxy_access_job_id_idx").on(table.jobId),
+    index("recipe_proxy_access_status_idx").on(table.status),
+    index("recipe_proxy_access_owner_idx").on(table.credentialOwnerUserId),
+    check(
+      "recipe_proxy_access_proxy_mode_check",
+      sql`${table.proxyMode} IN ('one_shot','recurring_auto')`,
+    ),
+    check(
+      "recipe_proxy_access_status_check",
+      sql`${table.status} IN ('active','revoked')`,
+    ),
   ],
 );
 
@@ -780,6 +826,8 @@ export type ErrorEvent = typeof errorEvents.$inferSelect;
 export type NewErrorEvent = typeof errorEvents.$inferInsert;
 export type JobExecution = typeof jobExecutions.$inferSelect;
 export type NewJobExecution = typeof jobExecutions.$inferInsert;
+export type RecipeProxyGrant = typeof recipeProxyGrants.$inferSelect;
+export type NewRecipeProxyGrant = typeof recipeProxyGrants.$inferInsert;
 export type OAuthToken = typeof oauthTokens.$inferSelect;
 export type NewOAuthToken = typeof oauthTokens.$inferInsert;
 export type EmailRaw = typeof emailsRaw.$inferSelect;
