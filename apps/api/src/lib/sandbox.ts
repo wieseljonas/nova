@@ -2,17 +2,50 @@ import * as nodePath from "node:path";
 import { getSetting, setSetting } from "./settings.js";
 import { getCredential, decryptCredential } from "./credentials.js";
 import { db } from "../db/client.js";
-import { credentials } from "@aura/db/schema";
-import { isNotNull } from "drizzle-orm";
+import { credentials, jobs } from "@aura/db/schema";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { logger } from "./logger.js";
 import { verifyProxyToken } from "./proxy-token.js";
 import { executionContext } from "./tool.js";
 
 const SANDBOX_NOTE_KEY = "e2b_sandbox_id";
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const RECIPE_ACTIVE_TIMEOUT_MS = 15 * 60 * 1000;
 
 /** Per-invocation cache -- reuse the same sandbox within a single request */
 let cachedSandbox: any | null = null;
+const runningRecipes = new Set<string>();
+
+export function markRecipeRunning(jobId: string): void {
+  runningRecipes.add(jobId);
+}
+
+export function clearRecipeRunning(jobId: string): void {
+  runningRecipes.delete(jobId);
+}
+
+async function pruneFinishedRecipeMarkers(): Promise<void> {
+  if (runningRecipes.size === 0) return;
+
+  const candidateIds = [...runningRecipes];
+  const activeRows = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        inArray(jobs.id, candidateIds),
+        eq(jobs.status, "running"),
+        isNotNull(jobs.recipeCommand),
+      ),
+    );
+
+  const activeIds = new Set(activeRows.map((row) => row.id));
+  for (const id of candidateIds) {
+    if (!activeIds.has(id)) {
+      runningRecipes.delete(id);
+    }
+  }
+}
 
 /**
  * Clear the cached sandbox reference so the next call to
@@ -334,6 +367,31 @@ export async function getOrCreateSandbox(): Promise<any> {
  */
 export async function pauseSandbox(): Promise<void> {
   if (!cachedSandbox) return;
+
+  try {
+    await pruneFinishedRecipeMarkers();
+  } catch (err: any) {
+    logger.warn("Failed to prune recipe running markers", {
+      error: err.message,
+    });
+  }
+
+  if (runningRecipes.size > 0) {
+    const sandboxId = cachedSandbox.sandboxId;
+    try {
+      await cachedSandbox.setTimeout(RECIPE_ACTIVE_TIMEOUT_MS);
+      logger.info("Skipping sandbox pause: recipe process still running", {
+        sandboxId,
+        runningRecipeJobIds: [...runningRecipes],
+      });
+    } catch (error: any) {
+      logger.warn("Failed to extend sandbox timeout with running recipe", {
+        sandboxId,
+        error: error.message,
+      });
+    }
+    return;
+  }
 
   try {
     const sandboxId = cachedSandbox.sandboxId;

@@ -3,7 +3,6 @@ import { z } from "zod";
 import { eq, and, desc, isNotNull, inArray } from "drizzle-orm";
 import type { WebClient } from "@slack/web-api";
 import { CronExpressionParser } from "cron-parser";
-import { waitUntil } from "@vercel/functions";
 import { db } from "../db/client.js";
 import {
   jobs,
@@ -16,7 +15,7 @@ import { isAdmin } from "../lib/permissions.js";
 import { logger } from "../lib/logger.js";
 import { parseRelativeTime, formatTimestamp } from "../lib/temporal.js";
 import { resolveChannelByName } from "./slack.js";
-import { runRecipe } from "../cron/run-recipe.js";
+import { runRecipe, parseRunningRecipeResult } from "../cron/run-recipe.js";
 import { getOrCreateSandbox, getSandboxEnvs } from "../lib/sandbox.js";
 import {
   clampRecipeTimeoutSeconds,
@@ -29,6 +28,10 @@ function getRecipeJobCondition(jobId?: string, name?: string) {
     isNotNull(jobs.recipeCommand),
     jobId ? eq(jobs.id, jobId) : eq(jobs.name, name!),
   );
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function createRecipeTools(
@@ -617,18 +620,7 @@ export function createRecipeTools(
             .where(eq(jobs.id, recipe.id))
             .returning();
 
-          waitUntil(
-            (async () => {
-              try {
-                await runRecipe(job, "dispatch");
-              } catch (err: any) {
-                logger.error("run_recipe_now failed", {
-                  jobId: job.id,
-                  error: err.message,
-                });
-              }
-            })(),
-          );
+          await runRecipe(job, "dispatch");
 
           return {
             ok: true,
@@ -717,51 +709,53 @@ export function createRecipeTools(
             };
           }
 
-          const now = new Date();
-          if (recipe.cronSchedule || recipe.frequencyConfig) {
-            await db
-              .update(jobs)
-              .set({
-                status: "pending",
-                executeAt: null,
-                retries: 0,
-                lastExecutedAt: now,
-                lastResult: "Recipe run stopped by user",
-                updatedAt: now,
-              })
-              .where(eq(jobs.id, recipe.id));
-          } else {
-            await db
-              .update(jobs)
-              .set({
-                status: "cancelled",
-                result: "Recipe run stopped by user",
-                updatedAt: now,
-              })
-              .where(eq(jobs.id, recipe.id));
+          const state = parseRunningRecipeResult(recipe.result);
+          if (!state) {
+            return {
+              ok: false,
+              error:
+                `Recipe "${recipe.name}" is running but has no runtime PID metadata. ` +
+                "Wait for heartbeat recovery or relaunch the run.",
+            };
+          }
+          if (!/^[0-9]+$/.test(state.pid)) {
+            return {
+              ok: false,
+              error: `Recipe "${recipe.name}" has an invalid PID in runtime metadata.`,
+            };
           }
 
-          await db
-            .update(jobExecutions)
-            .set({
-              status: "failed",
-              finishedAt: now,
-              error: "Execution stopped by stop_recipe_run",
-            })
-            .where(
-              and(
-                eq(jobExecutions.jobId, recipe.id),
-                eq(jobExecutions.status, "running"),
-              ),
-            );
+          const now = new Date();
+          const stopRequestedBy = context?.userId || "aura";
+          const updatedState = {
+            ...state,
+            stopRequestedBy,
+            stopRequestedAt: now.toISOString(),
+          };
 
-          let killResultSummary = "stop requested";
+          await db
+            .update(jobs)
+            .set({
+              result: JSON.stringify(updatedState),
+              updatedAt: now,
+            })
+            .where(eq(jobs.id, recipe.id));
+
+          let killResultSummary = `pid ${state.pid}`;
           try {
             const sandbox = await getOrCreateSandbox();
             const envs = await getSandboxEnvs();
-            const pidFile = `/tmp/recipe-job-${recipe.id}.pid`;
+            const stopMarker = `[nova] stop_recipe_run requested by ${stopRequestedBy}`;
+            const stopCmd = [
+              `kill -TERM ${state.pid} 2>/dev/null || true`,
+              "sleep 1",
+              `kill -KILL ${state.pid} 2>/dev/null || true`,
+              `echo 143 > ${shellQuote(state.exitFile)}`,
+              `echo ${shellQuote(stopMarker)} >> ${shellQuote(state.stderrFile)}`,
+              "echo stop_requested",
+            ].join("; ");
             const killResult = await sandbox.commands.run(
-              `bash -lc 'if [ -f "${pidFile}" ]; then PID=$(cat "${pidFile}"); kill -TERM "$PID" 2>/dev/null || true; sleep 1; kill -KILL "$PID" 2>/dev/null || true; echo killed; else echo pid_not_found; fi'`,
+              `bash -lc ${shellQuote(stopCmd)}`,
               { timeoutMs: 10_000, envs },
             );
             killResultSummary = (killResult.stdout || "").trim() || "stop requested";
@@ -770,6 +764,10 @@ export function createRecipeTools(
               recipeId: recipe.id,
               error: killErr.message,
             });
+            return {
+              ok: false,
+              error: `Failed to stop recipe "${recipe.name}": ${killErr.message}`,
+            };
           }
 
           return {
