@@ -25,25 +25,29 @@ export function clearRecipeRunning(jobId: string): void {
 }
 
 async function pruneFinishedRecipeMarkers(): Promise<void> {
-  if (runningRecipes.size === 0) return;
-
-  const candidateIds = [...runningRecipes];
   const activeRows = await db
     .select({ id: jobs.id })
     .from(jobs)
     .where(
       and(
-        inArray(jobs.id, candidateIds),
         eq(jobs.status, "running"),
         isNotNull(jobs.recipeCommand),
       ),
     );
 
   const activeIds = new Set(activeRows.map((row) => row.id));
-  for (const id of candidateIds) {
-    if (!activeIds.has(id)) {
-      runningRecipes.delete(id);
+  
+  if (runningRecipes.size > 0) {
+    const candidateIds = [...runningRecipes];
+    for (const id of candidateIds) {
+      if (!activeIds.has(id)) {
+        runningRecipes.delete(id);
+      }
     }
+  }
+  
+  for (const id of activeIds) {
+    runningRecipes.add(id);
   }
 }
 

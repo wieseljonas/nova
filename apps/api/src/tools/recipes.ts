@@ -21,6 +21,7 @@ import {
   clampRecipeTimeoutSeconds,
   resolveRecipeRoot,
 } from "../lib/recipes.js";
+import { shellQuote } from "../lib/shell-utils.js";
 
 function getRecipeJobCondition(jobId?: string, name?: string) {
   if (!jobId && !name) return null;
@@ -28,10 +29,6 @@ function getRecipeJobCondition(jobId?: string, name?: string) {
     isNotNull(jobs.recipeCommand),
     jobId ? eq(jobs.id, jobId) : eq(jobs.name, name!),
   );
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function createRecipeTools(

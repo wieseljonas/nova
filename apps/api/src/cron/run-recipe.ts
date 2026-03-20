@@ -23,6 +23,7 @@ import {
   clampRecipeTimeoutSeconds,
   resolveRecipeRoot,
 } from "../lib/recipes.js";
+import { shellQuote } from "../lib/shell-utils.js";
 import { MAX_RETRIES } from "./execute-job.js";
 
 const botToken = process.env.SLACK_BOT_TOKEN || "";
@@ -180,10 +181,6 @@ async function isStillRunning(jobId: string): Promise<boolean> {
     .where(eq(jobs.id, jobId))
     .limit(1);
   return rows[0]?.status === "running";
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function parseExitCode(stdout: string): number | null {
@@ -545,6 +542,8 @@ export async function runRecipe(
     const timeoutSeconds = clampRecipeTimeoutSeconds(job.recipeTimeoutSeconds);
     const tempPaths = buildRecipeTempPaths(job.id);
 
+    markRecipeRunning(jobId);
+
     launchState = await executionContext.run(
       {
         triggeredBy: job.requestedBy || "aura",
@@ -619,8 +618,6 @@ export async function runRecipe(
       },
     );
 
-    markRecipeRunning(jobId);
-
     await db
       .update(jobs)
       .set({
@@ -628,7 +625,7 @@ export async function runRecipe(
         result: JSON.stringify(launchState),
         updatedAt: new Date(),
       })
-      .where(eq(jobs.id, jobId));
+      .where(and(eq(jobs.id, jobId), eq(jobs.status, "running")));
 
     await db
       .update(jobExecutions)
@@ -729,6 +726,36 @@ export async function pollRunningRecipes(): Promise<{
       const exitRaw = (exitCheck.stdout || "").trim();
 
       if (exitRaw === RUNNING_SENTINEL) {
+        const elapsedSeconds = (Date.now() - new Date(state.launchedAt).getTime()) / 1000;
+        if (elapsedSeconds > state.recipeTimeoutSeconds) {
+          clearRecipeRunning(job.id);
+          const errorMessage = `Recipe timed out after ${Math.floor(elapsedSeconds)}s (limit: ${state.recipeTimeoutSeconds}s)`;
+          const provenance: Record<string, unknown> = {
+            mode: "recipe",
+            phase: "timeout",
+            pid: state.pid,
+            sandboxId: state.sandboxId,
+            recipeRoot: state.recipeRoot,
+            recipeCommand: state.recipeCommand,
+            recipeTimeoutSeconds: state.recipeTimeoutSeconds,
+            launchedAt: state.launchedAt,
+            elapsedSeconds: Math.floor(elapsedSeconds),
+          };
+          await markRecipeFailed(job, executionId, errorMessage, provenance);
+          try {
+            const killCmd = `kill -TERM ${state.pid} 2>/dev/null || true; sleep 1; kill -KILL ${state.pid} 2>/dev/null || true`;
+            await sandbox.commands.run(killCmd, { timeoutMs: 10_000 });
+            await cleanupRecipeTempFiles(sandbox, state);
+          } catch (killErr: any) {
+            logger.warn("pollRunningRecipes: failed to kill timed-out process", {
+              jobId: job.id,
+              error: killErr.message,
+            });
+          }
+          stats.failed++;
+          continue;
+        }
+
         markRecipeRunning(job.id);
         try {
           await sandbox.setTimeout(RECIPE_KEEPALIVE_MS);
@@ -805,6 +832,8 @@ export async function pollRunningRecipes(): Promise<{
         executionId,
         error: error.message,
       });
+      clearRecipeRunning(job.id);
+      stats.failed++;
     }
   }
 
