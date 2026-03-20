@@ -1,12 +1,12 @@
-# Aura Sandbox Template
+# Nova Sandbox Template
 
-Pre-baked e2b sandbox with all tools Aura needs — no install latency on first use.
+Pre-baked e2b sandbox with all tools Nova needs — no install latency on first use.
 
 ## Tools included
 
 | Tool | Purpose |
 |------|---------|
-| `psql` | PostgreSQL queries against Aura's own DB |
+| `psql` | PostgreSQL queries against Nova's own DB |
 | `gh` | GitHub CLI for PR/issue work |
 | `gcloud` / `bq` | BigQuery + GCS operations |
 | `jq` | JSON parsing in shell scripts |
@@ -14,7 +14,7 @@ Pre-baked e2b sandbox with all tools Aura needs — no install latency on first 
 | `python3` + `psycopg2` | Direct DB access via Python |
 | `vercel` | CLI for deployment logs |
 | `claude` | Claude Code agent dispatch |
-| `gcsfuse` | Mount GCS bucket at `/mnt/aura-files` |
+| `gcsfuse` | Mount GCS bucket at `/mnt/gcs` |
 | `pdftotext` | PDF text extraction |
 
 ## Building a new template
