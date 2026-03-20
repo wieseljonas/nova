@@ -6,6 +6,7 @@ import { jobs, notes, jobExecutions } from "@aura/db/schema";
 import type { FrequencyConfig } from "@aura/db/schema";
 import { logger } from "../lib/logger.js";
 import { executeJob, MAX_RETRIES } from "./execute-job.js";
+import { runRecipe } from "./run-recipe.js";
 
 /** Max jobs to process per heartbeat sweep */
 const MAX_JOBS_PER_SWEEP = 10;
@@ -141,7 +142,9 @@ heartbeatApp.get("/api/cron/heartbeat", async (c) => {
 
       for (const job of dueJobs) {
         try {
-          const ran = await executeJob(job, "heartbeat");
+          const ran = job.recipeCommand
+            ? await runRecipe(job, "heartbeat")
+            : await executeJob(job, "heartbeat");
           if (ran) executed++;
         } catch (error: any) {
           logger.error("Heartbeat: job execution error", {

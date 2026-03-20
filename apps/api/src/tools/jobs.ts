@@ -27,7 +27,7 @@ export function createJobTools(
   return {
     create_job: defineTool({
       description:
-        "Create a one-shot task, recurring job, or follow-up. This is the single tool for scheduling anything: reminders ('remind me in 2 hours'), monitoring, digests, follow-ups ('check this tomorrow'), and autonomous work ('do this every morning'). One-shots fire once at execute_in time; recurring jobs run on a cron schedule (e.g. '0 9 * * 1-5' for weekdays 9 AM) with optional frequency limits. Always include the user's timezone for recurring jobs. You can create jobs for yourself too. When you spot a new type of recurring work, codify it as a job with a playbook and frequency limits.",
+        "Create a one-shot task, recurring job, or follow-up. This is the single tool for scheduling anything: reminders ('remind me in 2 hours'), monitoring, digests, follow-ups ('check this tomorrow'), and autonomous work ('do this every morning'). One-shots fire once at execute_in time; recurring jobs run on a cron schedule (e.g. '0 9 * * 1-5' for weekdays 9 AM) with optional frequency limits. Always include the user's timezone for recurring jobs. You can create jobs for yourself too. When you spot a new type of recurring work, codify it as a job with a playbook and frequency limits. For deterministic code workflows that should run without LLM interpretation, use recipe tools (publish_recipe, run_recipe_now, etc.) instead of create_job.",
       inputSchema: z.object({
         name: z
           .string()
