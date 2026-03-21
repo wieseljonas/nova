@@ -18,6 +18,7 @@ import {
   truncateOutput,
   markRecipeRunning,
   clearRecipeRunning,
+  withTimeout,
 } from "../lib/sandbox.js";
 import {
   clampRecipeTimeoutSeconds,
@@ -206,26 +207,6 @@ function buildRecipeSummary(stdout: string): string {
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 function stepFailure(step: string, error: unknown): Error {
