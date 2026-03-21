@@ -11,8 +11,8 @@ import { executionContext } from "./tool.js";
 const SANDBOX_NOTE_KEY = "e2b_sandbox_id";
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const RECIPE_ACTIVE_TIMEOUT_MS = 15 * 60 * 1000;
-const CACHED_SANDBOX_TOUCH_TIMEOUT_MS = 10_000;
-const SANDBOX_RESUME_TIMEOUT_MS = 20_000;
+const CACHED_SANDBOX_TOUCH_TIMEOUT_MS = 20_000;
+const SANDBOX_RESUME_TIMEOUT_MS = 45_000;
 
 /** Per-invocation cache -- reuse the same sandbox within a single request */
 let cachedSandbox: any | null = null;
