@@ -73,7 +73,7 @@ async function loadE2B() {
   return Sandbox;
 }
 
-async function withTimeout<T>(
+export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   label: string,
