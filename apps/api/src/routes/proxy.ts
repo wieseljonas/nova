@@ -112,8 +112,13 @@ const proxyHandler = async (c: Context) => {
     );
   }
 
-  const body =
-    method === "GET" || method === "HEAD" ? undefined : c.req.raw.body;
+  // Buffer the request body instead of streaming — Node 18+/undici requires
+  // `duplex: 'half'` for streaming bodies, and buffering is more reliable
+  // across Vercel runtimes anyway.
+  let body: ArrayBuffer | undefined;
+  if (method !== "GET" && method !== "HEAD") {
+    body = await c.req.raw.arrayBuffer();
+  }
 
   let upstreamResponse: Response;
   try {
