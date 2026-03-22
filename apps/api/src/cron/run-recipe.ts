@@ -29,7 +29,7 @@ import { MAX_RETRIES } from "./execute-job.js";
 const botToken = process.env.SLACK_BOT_TOKEN || "";
 const slackClient = new WebClient(botToken);
 const RETRY_DELAY_MS = 10 * 60 * 1000;
-const RECIPE_KEEPALIVE_MS = 15 * 60 * 1000;
+const RECIPE_KEEPALIVE_MS = 45 * 60 * 1000;
 const RUNNING_SENTINEL = "__RUNNING__";
 const RECIPE_STDOUT_LIMIT = 12_000;
 const RECIPE_STDERR_LIMIT = 6_000;
@@ -38,6 +38,10 @@ const RECIPE_ROOT_CHECK_TIMEOUT_MS = 15_000;
 const RECIPE_LAUNCH_TIMEOUT_MS = 30_000;
 const RECIPE_PID_READ_TIMEOUT_MS = 10_000;
 const RECIPE_PROXY_ENVS_TIMEOUT_MS = 20_000;
+const RECIPE_PID_LIVENESS_TIMEOUT_MS = 5_000;
+const RECIPE_PROXY_TOKEN_MIN_TTL_MINUTES = 60;
+const RECIPE_PROXY_TOKEN_MAX_TTL_MINUTES = 180;
+const RECIPE_PROXY_TOKEN_BUFFER_MINUTES = 15;
 
 export interface RunningRecipeResult {
   kind: "recipe_runtime";
@@ -69,7 +73,6 @@ function getProxyBaseUrl(): string {
 async function buildRecipeProxyEnvs(
   job: typeof jobs.$inferSelect,
   executionId: string,
-  timeoutSeconds: number,
 ): Promise<Record<string, string>> {
   const proxyMode = job.recipeProxyMode || "off";
   if (proxyMode === "off") return {};
@@ -121,9 +124,13 @@ async function buildRecipeProxyEnvs(
     );
   }
 
+  const keepaliveMinutes = Math.ceil(RECIPE_KEEPALIVE_MS / 60_000);
   const ttlMinutes = Math.min(
-    60,
-    Math.max(5, Math.ceil(timeoutSeconds / 60) + 5),
+    RECIPE_PROXY_TOKEN_MAX_TTL_MINUTES,
+    Math.max(
+      RECIPE_PROXY_TOKEN_MIN_TTL_MINUTES,
+      keepaliveMinutes + RECIPE_PROXY_TOKEN_BUFFER_MINUTES,
+    ),
   );
   const proxyToken = mintProxyToken({
     credentialKeys,
@@ -196,6 +203,10 @@ function parseExitCode(stdout: string): number | null {
   if (!firstLine) return null;
   const exitCode = Number(firstLine);
   return Number.isInteger(exitCode) ? exitCode : null;
+}
+
+function isValidPid(pid: string): boolean {
+  return /^[0-9]+$/.test(pid);
 }
 
 function buildRecipeSummary(stdout: string): string {
@@ -305,6 +316,17 @@ async function readOutputTail(
     timeoutMs: 10_000,
   });
   return result.stdout || "";
+}
+
+async function isRecipePidAlive(
+  sandbox: any,
+  pid: string,
+): Promise<boolean> {
+  const checkCmd = `if kill -0 ${pid} 2>/dev/null; then echo ALIVE; else echo DEAD; fi`;
+  const check = await sandbox.commands.run(`bash -lc ${shellQuote(checkCmd)}`, {
+    timeoutMs: RECIPE_PID_LIVENESS_TIMEOUT_MS,
+  });
+  return (check.stdout || "").trim() === "ALIVE";
 }
 
 async function connectSandboxById(sandboxId: string): Promise<any> {
@@ -588,7 +610,6 @@ export async function runRecipe(
             buildRecipeProxyEnvs(
               job,
               executionId,
-              timeoutSeconds,
             ),
             RECIPE_PROXY_ENVS_TIMEOUT_MS,
             "buildRecipeProxyEnvs",
@@ -648,7 +669,7 @@ export async function runRecipe(
           throw stepFailure("readPidFile", error);
         }
         const pid = (pidResult.stdout || "").trim();
-        if (!pid || !/^[0-9]+$/.test(pid)) {
+        if (!pid || !isValidPid(pid)) {
           throw new Error(
             `Recipe failed at readPidFile: pid file missing or invalid (${tempPaths.pidFile})`,
           );
@@ -761,6 +782,23 @@ export async function pollRunningRecipes(): Promise<{
     }
 
     const executionId = await resolveRunningExecutionId(job.id, state.executionId);
+    if (!isValidPid(state.pid)) {
+      clearRecipeRunning(job.id);
+      await markRecipeFailed(
+        job,
+        executionId,
+        `Recipe runtime metadata has invalid pid: ${state.pid}`,
+        {
+          mode: "recipe",
+          phase: "poll_invalid_pid",
+          pid: state.pid,
+          sandboxId: state.sandboxId,
+        },
+        { markAsFailed: true },
+      );
+      stats.failed++;
+      continue;
+    }
     let sandbox = sandboxById.get(state.sandboxId);
 
     try {
@@ -781,6 +819,59 @@ export async function pollRunningRecipes(): Promise<{
       const exitRaw = (exitCheck.stdout || "").trim();
 
       if (exitRaw === RUNNING_SENTINEL) {
+        let pidAlive = false;
+        try {
+          pidAlive = await isRecipePidAlive(sandbox, state.pid);
+        } catch (pidCheckErr: any) {
+          logger.warn("pollRunningRecipes: failed to check process liveness", {
+            jobId: job.id,
+            pid: state.pid,
+            sandboxId: state.sandboxId,
+            error: pidCheckErr.message,
+          });
+        }
+
+        if (!pidAlive) {
+          clearRecipeRunning(job.id);
+          const runningStdout = await readOutputTail(
+            sandbox,
+            state.stdoutFile,
+            RECIPE_STDOUT_LIMIT,
+          );
+          const runningStderr = await readOutputTail(
+            sandbox,
+            state.stderrFile,
+            RECIPE_STDERR_LIMIT,
+          );
+          await markRecipeFailed(
+            job,
+            executionId,
+            `Recipe process ${state.pid} is no longer running and exit file ${state.exitFile} is missing.`,
+            {
+              mode: "recipe",
+              phase: "missing_exit_file_pid_dead",
+              pid: state.pid,
+              sandboxId: state.sandboxId,
+              recipeRoot: state.recipeRoot,
+              recipeCommand: state.recipeCommand,
+              recipeTimeoutSeconds: state.recipeTimeoutSeconds,
+              launchedAt: state.launchedAt,
+              stdout: truncateOutput(runningStdout || "", RECIPE_STDOUT_LIMIT),
+              stderr: truncateOutput(runningStderr || "", RECIPE_STDERR_LIMIT),
+            },
+          );
+          stats.failed++;
+          try {
+            await cleanupRecipeTempFiles(sandbox, state);
+          } catch (cleanupErr: any) {
+            logger.warn("pollRunningRecipes: failed to clean temp files", {
+              jobId: job.id,
+              error: cleanupErr.message,
+            });
+          }
+          continue;
+        }
+
         markRecipeRunning(job.id);
         try {
           await sandbox.setTimeout(RECIPE_KEEPALIVE_MS);
