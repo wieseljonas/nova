@@ -54,10 +54,12 @@ export function checkAccess(
 /**
  * Get approvers for a credential (owner + writers).
  * Used when creating approval cards.
+ * Filters out wildcard '*' since it's not a real user ID.
  */
 export function getApprovers(credential: Credential): string[] {
   const writerIds = (credential.writerUserIds as string[]) ?? [];
-  return [credential.ownerUserId, ...writerIds];
+  const realWriterIds = writerIds.filter(id => id !== '*');
+  return [credential.ownerUserId, ...realWriterIds];
 }
 
 /**
@@ -118,7 +120,7 @@ export async function isAuthorizedApprover(
 
   const isOwner = credential.ownerUserId === userId;
   const writerIds = (credential.writerUserIds as string[]) ?? [];
-  const isWriter = writerIds.includes(userId);
+  const isWriter = writerIds.includes('*') || writerIds.includes(userId);
 
   return isOwner || isWriter;
 }
