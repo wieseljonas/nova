@@ -618,9 +618,10 @@ export async function runRecipe(
         }
 
         const launchPayload = `${recipeCommand} > ${tempPaths.stdoutFile} 2> ${tempPaths.stderrFile}; echo $? > ${tempPaths.exitFile}`;
+        const detachedLaunch = `setsid bash -lc ${shellQuote(launchPayload)} </dev/null >/dev/null 2>&1 & echo $! > ${shellQuote(tempPaths.pidFile)}; disown || true`;
         const launchCmd = [
           `rm -f ${shellQuote(tempPaths.pidFile)} ${shellQuote(tempPaths.stdoutFile)} ${shellQuote(tempPaths.stderrFile)} ${shellQuote(tempPaths.exitFile)}`,
-          `nohup bash -lc ${shellQuote(launchPayload)} </dev/null >/dev/null 2>&1 & echo $! > ${shellQuote(tempPaths.pidFile)}`,
+          `bash -lc ${shellQuote(detachedLaunch)}`,
         ].join(" && ");
 
         try {
