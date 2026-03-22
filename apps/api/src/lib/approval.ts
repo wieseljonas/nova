@@ -9,8 +9,8 @@ import { eq, and } from "drizzle-orm";
  * 
  * Access rules:
  * - Owner (ownerUserId) always has write access + is approver (implicit)
- * - readerUserIds can trigger GETs, auto-executed. Writes = denied.
- * - writerUserIds can trigger any method. Writes need approval from owner or another writer.
+ * - readerUserIds can trigger GETs, auto-executed. Writes = denied. Use '*' for public read.
+ * - writerUserIds can trigger any method. Writes need approval from owner or another writer. Use '*' for public write.
  * - No match = denied
  * 
  * @param credential The credential being accessed
@@ -29,13 +29,13 @@ export function checkAccess(
   // Owner has full access
   const isOwner = credential.ownerUserId === userId;
   
-  // Check if user is in writer list
+  // Check if user is in writer list ('*' = everyone)
   const writerIds = (credential.writerUserIds as string[]) ?? [];
-  const isWriter = writerIds.includes(userId);
+  const isWriter = writerIds.includes('*') || writerIds.includes(userId);
   
-  // Check if user is in reader list
+  // Check if user is in reader list ('*' = everyone)
   const readerIds = (credential.readerUserIds as string[]) ?? [];
-  const isReader = readerIds.includes(userId);
+  const isReader = readerIds.includes('*') || readerIds.includes(userId);
   
   // Owner or writer + write method -> require approval
   if ((isOwner || isWriter) && isWrite) {
