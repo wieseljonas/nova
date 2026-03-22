@@ -823,12 +823,14 @@ export async function pollRunningRecipes(): Promise<{
         try {
           pidAlive = await isRecipePidAlive(sandbox, state.pid);
         } catch (pidCheckErr: any) {
-          logger.warn("pollRunningRecipes: failed to check process liveness", {
+          logger.warn("pollRunningRecipes: failed to check process liveness, deferring to next poll", {
             jobId: job.id,
             pid: state.pid,
             sandboxId: state.sandboxId,
             error: pidCheckErr.message,
           });
+          stats.running++;
+          continue;
         }
 
         if (!pidAlive) {
