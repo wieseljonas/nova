@@ -18,6 +18,7 @@ import {
   truncateOutput,
   markRecipeRunning,
   clearRecipeRunning,
+  withTimeout,
 } from "../lib/sandbox.js";
 import {
   clampRecipeTimeoutSeconds,
@@ -33,6 +34,10 @@ const RUNNING_SENTINEL = "__RUNNING__";
 const RECIPE_STDOUT_LIMIT = 12_000;
 const RECIPE_STDERR_LIMIT = 6_000;
 const RECIPE_SUMMARY_LIMIT = 500;
+const RECIPE_ROOT_CHECK_TIMEOUT_MS = 15_000;
+const RECIPE_LAUNCH_TIMEOUT_MS = 30_000;
+const RECIPE_PID_READ_TIMEOUT_MS = 10_000;
+const RECIPE_PROXY_ENVS_TIMEOUT_MS = 20_000;
 
 export interface RunningRecipeResult {
   kind: "recipe_runtime";
@@ -197,6 +202,15 @@ function buildRecipeSummary(stdout: string): string {
   return (stdout || "Recipe completed (no output)")
     .trim()
     .slice(0, RECIPE_SUMMARY_LIMIT);
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function stepFailure(step: string, error: unknown): Error {
+  return new Error(`Recipe failed at ${step}: ${errorMessage(error)}`);
 }
 
 function buildRecipeTempPaths(jobId: string): {
@@ -554,25 +568,53 @@ export async function runRecipe(
         threadTs: job.threadTs || undefined,
       },
       async () => {
-        const sandbox = await getOrCreateSandbox();
-        const envs = await getSandboxEnvs();
-        const proxyEnvs = await buildRecipeProxyEnvs(
-          job,
-          executionId,
-          timeoutSeconds,
-        );
+        let sandbox: any;
+        try {
+          sandbox = await getOrCreateSandbox();
+        } catch (error: unknown) {
+          throw stepFailure("getOrCreateSandbox", error);
+        }
+
+        let envs: Record<string, string>;
+        try {
+          envs = await getSandboxEnvs();
+        } catch (error: unknown) {
+          throw stepFailure("getSandboxEnvs", error);
+        }
+
+        let proxyEnvs: Record<string, string>;
+        try {
+          proxyEnvs = await withTimeout(
+            buildRecipeProxyEnvs(
+              job,
+              executionId,
+              timeoutSeconds,
+            ),
+            RECIPE_PROXY_ENVS_TIMEOUT_MS,
+            "buildRecipeProxyEnvs",
+          );
+        } catch (error: unknown) {
+          throw stepFailure("buildRecipeProxyEnvs", error);
+        }
         const runEnvs = { ...envs, ...proxyEnvs };
 
         // Guardrail: root must exist at publish/runtime.
-        const rootCheck = await sandbox.commands.run(
-          `test -d "${recipeRoot}" && echo ok || echo missing`,
-          {
-            timeoutMs: 5_000,
-            envs: runEnvs,
-          },
-        );
+        let rootCheck: any;
+        try {
+          rootCheck = await sandbox.commands.run(
+            `test -d "${recipeRoot}" && echo ok || echo missing`,
+            {
+              timeoutMs: RECIPE_ROOT_CHECK_TIMEOUT_MS,
+              envs: runEnvs,
+            },
+          );
+        } catch (error: unknown) {
+          throw stepFailure("rootCheck", error);
+        }
         if (rootCheck.stdout?.trim() !== "ok") {
-          throw new Error(`Recipe root does not exist: ${recipeRoot}`);
+          throw new Error(
+            `Recipe failed at rootCheck: recipe root does not exist: ${recipeRoot}`,
+          );
         }
 
         const launchPayload = `${recipeCommand} > ${tempPaths.stdoutFile} 2> ${tempPaths.stderrFile}; echo $? > ${tempPaths.exitFile}`;
@@ -581,24 +623,33 @@ export async function runRecipe(
           `nohup bash -lc ${shellQuote(launchPayload)} </dev/null >/dev/null 2>&1 & echo $! > ${shellQuote(tempPaths.pidFile)}`,
         ].join(" && ");
 
-        await sandbox.commands.run(launchCmd, {
-          timeoutMs: 10_000,
-          cwd: recipeRoot,
-          envs: runEnvs,
-        });
-
-        const pidResult = await sandbox.commands.run(
-          `cat ${shellQuote(tempPaths.pidFile)}`,
-          {
-            timeoutMs: 5_000,
+        try {
+          await sandbox.commands.run(launchCmd, {
+            timeoutMs: RECIPE_LAUNCH_TIMEOUT_MS,
             cwd: recipeRoot,
             envs: runEnvs,
-          },
-        );
+          });
+        } catch (error: unknown) {
+          throw stepFailure("launchBackgroundProcess", error);
+        }
+
+        let pidResult: any;
+        try {
+          pidResult = await sandbox.commands.run(
+            `cat ${shellQuote(tempPaths.pidFile)}`,
+            {
+              timeoutMs: RECIPE_PID_READ_TIMEOUT_MS,
+              cwd: recipeRoot,
+              envs: runEnvs,
+            },
+          );
+        } catch (error: unknown) {
+          throw stepFailure("readPidFile", error);
+        }
         const pid = (pidResult.stdout || "").trim();
         if (!pid || !/^[0-9]+$/.test(pid)) {
           throw new Error(
-            `Failed to launch recipe process: pid file missing or invalid (${tempPaths.pidFile})`,
+            `Recipe failed at readPidFile: pid file missing or invalid (${tempPaths.pidFile})`,
           );
         }
 
