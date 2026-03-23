@@ -399,7 +399,7 @@ async function markRecipeSucceeded(
     await safePostMessage(slackClient, {
       channel: job.channelId,
       thread_ts: job.threadTs || undefined,
-      text: `Recipe "${job.name}" completed. ${firstLine}`,
+      text: `:white_check_mark: *${job.name}* completed\n>${firstLine}`,
     });
   }
 }
@@ -525,7 +525,7 @@ async function markRecipeFailed(
       if (dmResult.channel?.id) {
         await safePostMessage(slackClient, {
           channel: dmResult.channel.id,
-          text: `Recipe "${job.name}" failed after ${MAX_RETRIES} retries.\n\nError: ${errorMessage}`,
+          text: `:x: *${job.name}* failed after ${MAX_RETRIES} retries\n\n\`\`\`${errorMessage}\`\`\``,
         });
       }
     }
